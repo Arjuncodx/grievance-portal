@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+build/
+.env
+.env.local
+*.log
+npm-debug.log*
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+public/uploads/profile/*
+!public/uploads/profile/.gitkeep
+public/uploads/complaints/*
+!public/uploads/complaints/.gitkeep
