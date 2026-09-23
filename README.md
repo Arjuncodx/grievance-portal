@@ -376,7 +376,24 @@ To require everyone to re-verify:
 UPDATE users SET email_verification_exempt = 0 WHERE email_verified_at IS NULL;
 ```
 
-## 10. What's Next
+## 10. Deployment
+
+The app needs a Node server, MySQL, and a persistent disk for uploads.
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for step-by-step Railway instructions.
+
+Connection settings accept either `DATABASE_URL` / `MYSQL_URL` or the discrete
+`DB_*` variables, so the same build runs locally and against a managed database.
+
+```bash
+# Point at a fresh managed database and load everything
+DATABASE_URL='mysql://user:pass@host:port/dbname' npm run db:setup
+```
+
+`db:setup` = `bootstrap-db.js` (loads schema.sql; refuses if tables already
+exist) → `migrate.js` → `seed-gcc-reference.js`. For an existing database, run
+`npm run migrate` instead.
+
+## 11. What's Next
 
 The `department_officer` (`/officer`) and `collector` (`/collector`)
 dashboards are currently placeholder pages, gated by the same

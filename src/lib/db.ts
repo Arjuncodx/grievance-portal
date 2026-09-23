@@ -5,13 +5,41 @@ declare global {
   var __mysqlPool: Pool | undefined;
 }
 
-function createPool(): Pool {
-  return mysql.createPool({
+/**
+ * Connection settings from either discrete DB_* vars or a connection URL.
+ * Managed hosts (Railway, Aiven, PlanetScale, ...) provide a URL, so accepting
+ * both lets the same build run locally and in production.
+ */
+function connectionSettings() {
+  const url = process.env.DATABASE_URL || process.env.MYSQL_URL;
+  if (url) {
+    const u = new URL(url);
+    return {
+      host: u.hostname,
+      port: Number(u.port) || 3306,
+      user: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+      database: u.pathname.replace(/^\//, ""),
+      // Managed MySQL generally requires TLS.
+      ssl:
+        u.searchParams.get("ssl") === "false"
+          ? undefined
+          : { rejectUnauthorized: false }
+    };
+  }
+  return {
     host: process.env.DB_HOST || "localhost",
     port: Number(process.env.DB_PORT) || 3306,
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "",
     database: process.env.DB_NAME || "district_collector_dashboard",
+    ssl: undefined
+  };
+}
+
+function createPool(): Pool {
+  return mysql.createPool({
+    ...connectionSettings(),
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,

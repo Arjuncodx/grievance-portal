@@ -21,7 +21,7 @@
 const fs = require("fs");
 const path = require("path");
 const mysql = require("mysql2/promise");
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const { getDbConfig, describeDb } = require("./db-config");
 
 const REF_DIR = path.join(__dirname, "..", "data", "gcc-reference");
 const BND_DIR = path.join(__dirname, "..", "data", "boundaries");
@@ -77,13 +77,8 @@ async function recordSource(conn, dataset, info) {
 }
 
 async function main() {
-  const conn = await mysql.createConnection({
-    host: process.env.DB_HOST || "localhost",
-    port: Number(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
-    database: process.env.DB_NAME || "district_collector_dashboard"
-  });
+  console.log("Database: " + describeDb());
+  const conn = await mysql.createConnection(getDbConfig());
 
   // ---- Departments lookup -------------------------------------------------
   const [deptRows] = await conn.query("SELECT id, name FROM departments");

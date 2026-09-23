@@ -13,19 +13,16 @@
 const fs = require("fs");
 const path = require("path");
 const mysql = require("mysql2/promise");
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const { getDbConfig, describeDb } = require("./db-config");
 
 const MIGRATIONS_DIR = path.join(__dirname, "..", "migrations");
 const STATUS_ONLY = process.argv.includes("--status");
 const DRY_RUN = process.argv.includes("--dry-run");
 
 async function main() {
+  console.log("Database: " + describeDb());
   const conn = await mysql.createConnection({
-    host: process.env.DB_HOST || "localhost",
-    port: Number(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
-    database: process.env.DB_NAME || "district_collector_dashboard",
+    ...getDbConfig(),
     multipleStatements: true
   });
 
