@@ -37,7 +37,8 @@ mysql -u root -p < schema.sql
 
 # 3. Configure environment variables
 cp .env.example .env
-# then edit .env with your DB credentials, JWT secret, SMTP creds, OpenAI key, etc.
+# then edit .env with your DB credentials and JWT secret.
+# SMTP is only needed for password reset and mobile OTP emails.
 
 # 4. Apply migrations (idempotent; safe to re-run)
 node scripts/migrate.js
@@ -329,52 +330,47 @@ refreshed from it. Note that Adyar (170–182) and Perungudi (168–191) have
 cannot represent — validation therefore uses `zone_wards`, and the discrepancy
 is recorded in `data/boundaries/gcc-wards.meta.json`.
 
-### Area → ward mapping — deliberately absent
+### Area → ward mapping — DERIVED, not authoritative
 
-`locality_wards` exists but ships **empty**. No authoritative area/locality → ward
-mapping is obtainable: GCC's boundary chain carries no ward numbers, its GIS
-server was unreachable, and its locality lists have no coordinates to place
-inside a ward polygon.
+The ward dropdown narrows to the wards of the selected area. GCC publishes no
+such mapping, so `scripts/derive-area-wards.js` approximates one:
 
-So `/api/locations/wards` returns `filtered: false` and every GCC ward, labelled
-`"Ward N — <zone>"` — the zone is real, and no ward *name* is invented because
-GCC publishes none. The form states plainly that no verified area-to-ward
-mapping is loaded and that the map pin is the reliable way to determine the
-ward. Populate `locality_wards` and the dropdown filters itself automatically,
-auto-filling only when a locality maps to exactly one ward.
+1. each GCC area name is geocoded against OpenStreetMap (Nominatim);
+2. every ward polygon intersecting the returned bounding box becomes a
+   candidate, and the ward containing the point is marked primary.
 
-## 9. Email verification
-
-Registration creates a **pending, unverified account** and emails a 6-digit
-code. Until it is verified the account holds no session and reaches no protected
-route or API.
-
-* Codes come from `crypto.randomInt` (not `Math.random`), are stored only as
-  bcrypt hashes, expire after 10 minutes, allow 5 attempts, and are superseded
-  when a new one is issued.
-* A correct code is **consumed atomically** by a conditional `UPDATE`, so two
-  concurrent requests carrying the same code cannot both succeed.
-* Resend is limited to one code per 60 seconds, with per-IP and per-email rate
-  limits on top of the per-code attempt counter.
-* `email_verify` is a distinct OTP purpose, never shared with password reset or
-  mobile verification.
-* If the SMTP server does not accept the message, the API returns an error and
-  discards the unusable code. It **never** reports "email sent" for a failed
-  submission. Registration is refused outright when SMTP is unconfigured.
-* Verifying an email grants **no role or permission** — it only sets
-  `email_verified_at`. Authorisation still comes from the account's role.
-
-### Existing accounts
-
-The migration does **not** mark existing emails verified. Accounts present when
-`001_email_verification.sql` ran keep `email_verified_at = NULL` and are instead
-flagged `email_verification_exempt = 1`, which grandfathers them so they can
-still sign in while remaining distinguishable from genuinely verified accounts.
-To require everyone to re-verify:
-
-```sql
-UPDATE users SET email_verification_exempt = 0 WHERE email_verified_at IS NULL;
+```bash
+node scripts/derive-area-wards.js
 ```
+
+Rows land in `area_wards` with `confidence = 'derived'`. This cuts a 200-item
+dropdown to roughly a dozen and is explicitly **not** good enough to decide
+which ward a complaint belongs to:
+
+* the form labels the list as approximate and says it is estimated from map
+  data, not published by the Corporation;
+* areas that fail to geocode fall back to the full 200-ward list;
+* a ward resolved by point-in-polygon from a real map pin always overrides it,
+  and the submit endpoint re-checks the pin server-side.
+
+`locality_wards` from migration 004 remains and is still empty; the form now
+asks for area + street rather than area + locality + street, so `area_wards` is
+the table in use.
+
+## 9. Accounts and sign-in
+
+Registration creates an account that can sign in immediately. There is no email
+verification step.
+
+Accounts created this way are stored with `email_verified_at = NULL` and
+`email_verification_exempt = 1`: the address was never confirmed, and the flag
+records why the account is nonetheless allowed to sign in. Those two columns and
+the `email_verify` OTP purpose remain in the schema so verification can be
+switched back on without a migration — see the git history for the previous
+implementation.
+
+OTP flows are still used for **password reset** and **mobile number
+verification**, which is why `src/lib/otp.ts` and the SMTP settings remain.
 
 ## 10. Deployment
 

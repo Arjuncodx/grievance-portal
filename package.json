@@ -13,7 +13,8 @@
     "import:wards": "node scripts/import-ward-boundaries.js",
     "seed:gcc": "node scripts/seed-gcc-reference.js",
     "db:setup": "node scripts/bootstrap-db.js && node scripts/migrate.js && node scripts/seed-gcc-reference.js",
-    "bootstrap:db": "node scripts/bootstrap-db.js"
+    "bootstrap:db": "node scripts/bootstrap-db.js",
+    "derive:area-wards": "node scripts/derive-area-wards.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

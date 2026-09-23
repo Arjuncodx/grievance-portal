@@ -5,13 +5,6 @@ export interface JwtPayload {
   email: string;
   role: UserRole;
   departmentId: number | null;
-  /**
-   * True when the account's email is verified, or when it is a grandfathered
-   * account that predates verification. Tokens issued before email
-   * verification existed omit this field; treat `undefined` as allowed, since
-   * such tokens could only have been issued to pre-existing accounts.
-   */
-  emailVerified?: boolean;
 }
 
 export interface UserRow {

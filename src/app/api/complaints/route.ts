@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import pool, { withTransaction } from "@/lib/db";
-import { getSessionFromCookies, getVerifiedSession } from "@/lib/auth";
+import { getSessionFromCookies, getActiveSession } from "@/lib/auth";
 import { complaintSubmitSchema } from "@/lib/validators";
 import { generateUniqueComplaintCode } from "@/lib/complaint-code";
 import { resolveWard } from "@/lib/wards";
@@ -9,11 +9,10 @@ import { RowDataPacket, ResultSetHeader } from "mysql2";
 
 export async function POST(req: NextRequest) {
   try {
-    // An account that has not proved its email address may not file.
-    const session = await getVerifiedSession();
+    const session = await getActiveSession();
     if (!session) {
       return NextResponse.json(
-        { error: "Please sign in with a verified account to file a complaint." },
+        { error: "Please sign in to file a complaint." },
         { status: 401 }
       );
     }
@@ -28,33 +27,35 @@ export async function POST(req: NextRequest) {
     // ---- Re-validate every location relationship server-side -------------
     // The client already enforces these, which is exactly why the server must
     // not trust them.
-    const [localityRows] = await pool.query<RowDataPacket[]>(
-      `SELECT l.id, l.name, l.area_id, a.name AS area_name
-         FROM gcc_localities l JOIN gcc_areas a ON a.id = l.area_id
-        WHERE l.id = ? LIMIT 1`,
-      [data.gccLocalityId]
+    const [areaRows] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM gcc_areas WHERE id = ? LIMIT 1",
+      [data.areaId]
     );
-    if (localityRows.length === 0) {
-      return NextResponse.json({ error: "Selected locality is not recognised." }, { status: 400 });
-    }
-    if (localityRows[0].area_id !== data.areaId) {
-      return NextResponse.json(
-        { error: "The selected locality does not belong to the selected area." },
-        { status: 400 }
-      );
+    if (areaRows.length === 0) {
+      return NextResponse.json({ error: "Selected area is not recognised." }, { status: 400 });
     }
 
+    // The locality is taken from the chosen street, not from the client: a
+    // street belongs to exactly one locality, so accepting a locality from the
+    // request would only create a way for the two to disagree.
+    let localityId: number | null = null;
     if (data.gccStreetId) {
       const [streetRows] = await pool.query<RowDataPacket[]>(
-        "SELECT id FROM gcc_streets WHERE id = ? AND locality_id = ? LIMIT 1",
-        [data.gccStreetId, data.gccLocalityId]
+        `SELECT s.id, s.locality_id, l.area_id
+           FROM gcc_streets s JOIN gcc_localities l ON l.id = s.locality_id
+          WHERE s.id = ? LIMIT 1`,
+        [data.gccStreetId]
       );
       if (streetRows.length === 0) {
+        return NextResponse.json({ error: "Selected street is not recognised." }, { status: 400 });
+      }
+      if (streetRows[0].area_id !== data.areaId) {
         return NextResponse.json(
-          { error: "The selected street does not belong to the selected locality." },
+          { error: "The selected street does not belong to the selected area." },
           { status: 400 }
         );
       }
+      localityId = streetRows[0].locality_id as number;
     }
 
     // Ward must be a real GCC ward; its zone comes from the ward, not the client.
@@ -173,7 +174,7 @@ export async function POST(req: NextRequest) {
           data.wardNumber,
           wardSource,
           data.areaId,
-          data.gccLocalityId,
+          localityId,
           data.gccStreetId ?? null,
           data.manualStreetName || null,
           data.streetType || null,

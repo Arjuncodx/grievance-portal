@@ -100,22 +100,3 @@ export function otpEmailHtml(otp: string, purposeLabel: string): string {
   );
 }
 
-export function emailVerificationHtml(otp: string): string {
-  return SHELL(
-    "Confirm your email address",
-    `<p>
-       Thanks for registering. Enter this code in the portal to finish creating
-       your account:
-     </p>
-     ${CODE_BLOCK(otp)}
-     <p>
-       The code is valid for <strong>10 minutes</strong> and can be used once.
-       Do not share it with anyone &mdash; Corporation staff will never ask you
-       for it.
-     </p>
-     <p style="color: #666; font-size: 12px;">
-       If you did not try to register, no account has been activated and you can
-       ignore this email.
-     </p>`
-  );
-}

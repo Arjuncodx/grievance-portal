@@ -68,15 +68,11 @@ database credentials stay in sync automatically:
 `DB_NAME` variables, so either style works. TLS is enabled automatically for
 URL-based connections, which managed MySQL requires.
 
-### SMTP is not optional
+### SMTP is optional
 
-Registration is **refused** when SMTP is unconfigured — an account that cannot
-receive its verification code can never be used. Without working SMTP, nobody
-can sign up on the deployed site. Existing accounts still sign in, because they
-are grandfathered by `email_verification_exempt`.
-
-`.env.example` lists free-tier providers and their sender/domain verification
-requirements.
+There is no email verification at registration, so people can sign up without
+it. SMTP is only used for password-reset codes and mobile-number verification;
+leave it unset and those two flows will report that mail could not be sent.
 
 ## 5. Load the database
 
@@ -95,8 +91,18 @@ DATABASE_URL='mysql://user:pass@host:port/railway' npm run db:setup
    the database already has tables**, because `schema.sql` drops tables and
    would destroy existing complaints. Use `npm run migrate` to update an
    existing database instead.
-2. `migrate.js` — applies migrations 001–005.
+2. `migrate.js` — applies every pending migration.
 3. `seed-gcc-reference.js` — loads the GCC reference data from `data/`.
+
+Then derive the area → ward mapping that narrows the ward dropdown (about five
+minutes; it geocodes area names against OpenStreetMap at one request per
+second):
+
+```bash
+DATABASE_URL='mysql://...' npm run derive:area-wards
+```
+
+Skipping it is safe — the ward dropdown simply lists all 200 wards.
 
 The reference JSON is committed to the repo, so this does **not** re-fetch
 anything from the GCC servers. To refresh it later, run `npm run import:gcc`
@@ -134,8 +140,6 @@ by [`src/lib/wards.ts`](src/lib/wards.ts); confirm `data/` was not excluded by a
 
 **Uploads fail or disappear after redeploy** — the volume is missing or mounted
 at the wrong path. It must be exactly `/app/public/uploads`.
-
-**Registration returns 503** — SMTP variables are unset. See step 4.
 
 **Login succeeds but immediately bounces back** — `JWT_SECRET` changed between
 deploys, invalidating issued cookies, or the app is being served over plain

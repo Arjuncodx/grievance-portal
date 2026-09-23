@@ -55,17 +55,13 @@ interface GccArea {
   gcc_id: number;
   name: string;
 }
-interface GccLocality {
-  id: number;
-  gcc_id: number;
-  name: string;
-  area_id: number;
-}
 interface GccStreet {
   id: number;
   gcc_id: number;
   name: string;
   locality_id: number;
+  /** Shown as a second line, so no separate locality field is needed. */
+  locality_name: string;
 }
 interface WardOption {
   wardNumber: number;
@@ -73,6 +69,8 @@ interface WardOption {
   zoneNumber: number;
   zoneName: string;
   label: string;
+  /** The single likeliest ward for the area, from the derived mapping. */
+  isPrimary: boolean;
 }
 
 /** Outcome of resolving the map pin against GCC ward polygons. */
@@ -126,12 +124,12 @@ export default function FileComplaintPage() {
 
   // Step 2: location (verified GCC Area -> Locality -> Street)
   const [areas, setAreas] = useState<GccArea[]>([]);
-  const [gccLocalities, setGccLocalities] = useState<GccLocality[]>([]);
+
   const [gccStreets, setGccStreets] = useState<GccStreet[]>([]);
-  const [loadingLocalities, setLoadingLocalities] = useState(false);
+
   const [loadingStreets, setLoadingStreets] = useState(false);
   const [areaId, setAreaId] = useState("");
-  const [gccLocalityId, setGccLocalityId] = useState("");
+
   const [gccStreetId, setGccStreetId] = useState("");
   const [manualStreetMode, setManualStreetMode] = useState(false);
   const [manualStreetName, setManualStreetName] = useState("");
@@ -143,6 +141,8 @@ export default function FileComplaintPage() {
   // Ward: resolved from the map pin where possible, otherwise chosen.
   const [wards, setWards] = useState<WardOption[]>([]);
   const [wardsFiltered, setWardsFiltered] = useState(false);
+  const [wardConfidence, setWardConfidence] = useState<"verified" | "derived" | null>(null);
+  const [suggestedWard, setSuggestedWard] = useState<number | null>(null);
   const [wardNotice, setWardNotice] = useState<string | null>(null);
   const [wardNumber, setWardNumber] = useState("");
   const [wardSource, setWardSource] = useState<"map_boundary" | "user_selected" | "">("");
@@ -156,10 +156,11 @@ export default function FileComplaintPage() {
   const editedFields = useRef<Set<string>>(new Set());
   /** Guards against a slow ward lookup landing after a newer pin was placed. */
   const wardSeq = useRef(0);
+  /** Which fields the map filled in, so the form can say so. */
+  const [autofilled, setAutofilled] = useState<Set<string>>(new Set());
 
   // Step 3: GCC complaint category / subcomplaint
   const [categories, setCategories] = useState<ComplaintCategory[]>([]);
-  const [frequent, setFrequent] = useState<Subcomplaint[]>([]);
   const [taxonomySource, setTaxonomySource] = useState<TaxonomySource | null>(null);
   const [taxonomyLoading, setTaxonomyLoading] = useState(true);
   const [selectedSubtype, setSelectedSubtype] = useState<Subcomplaint | null>(null);
@@ -217,60 +218,31 @@ export default function FileComplaintPage() {
       .then((r) => r.json())
       .then((d) => {
         setCategories(d.categories || []);
-        setFrequent(d.frequent || []);
         setTaxonomySource(d.source || null);
       })
       .catch(() => {
         setCategories([]);
-        setFrequent([]);
       })
       .finally(() => setTaxonomyLoading(false));
   }, []);
 
-  // Area -> localities. Changing the area invalidates everything downstream.
+  // Area -> streets. Every street carries its locality, so a separate
+  // locality step would only ask for something the street already states.
   useEffect(() => {
-    setGccLocalityId("");
     setGccStreetId("");
-    setGccStreets([]);
     setManualStreetMode(false);
     if (!areaId) {
-      setGccLocalities([]);
-      return;
-    }
-    let stale = false;
-    setLoadingLocalities(true);
-    fetch(`/api/locations/gcc-localities?areaId=${areaId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (!stale) setGccLocalities(d.localities || []);
-      })
-      .catch(() => {
-        if (!stale) setGccLocalities([]);
-      })
-      .finally(() => {
-        if (!stale) setLoadingLocalities(false);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [areaId]);
-
-  // Locality -> streets.
-  useEffect(() => {
-    setGccStreetId("");
-    if (!gccLocalityId) {
       setGccStreets([]);
       return;
     }
     let stale = false;
     setLoadingStreets(true);
-    fetch(`/api/locations/gcc-streets?localityId=${gccLocalityId}`)
+    fetch(`/api/locations/gcc-streets?areaId=${areaId}`)
       .then((r) => r.json())
       .then((d) => {
         if (stale) return;
         const list: GccStreet[] = d.streets || [];
         setGccStreets(list);
-        // A locality with no streets on record can only be entered manually.
         if (list.length === 0) setManualStreetMode(true);
       })
       .catch(() => {
@@ -285,33 +257,25 @@ export default function FileComplaintPage() {
     return () => {
       stale = true;
     };
-  }, [gccLocalityId]);
+  }, [areaId]);
+
 
   /**
-   * Ward options for the current area/locality. The API reports whether it
-   * actually narrowed the list; when it did not, the notice it returns is shown
-   * verbatim rather than implying the wards belong to the selected area.
+   * Ward options for the selected area. The API says whether it actually
+   * narrowed the list and how trustworthy that narrowing is; the notice it
+   * returns is shown verbatim rather than implying the wards are authoritative.
    */
   useEffect(() => {
-    const params = gccLocalityId
-      ? `localityId=${gccLocalityId}`
-      : areaId
-      ? `areaId=${areaId}`
-      : "";
     let stale = false;
-    fetch(`/api/locations/wards${params ? "?" + params : ""}`)
+    fetch(`/api/locations/wards${areaId ? "?areaId=" + areaId : ""}`)
       .then((r) => r.json())
       .then((d) => {
         if (stale) return;
         setWards(d.wards || []);
         setWardsFiltered(Boolean(d.filtered));
+        setWardConfidence(d.confidence ?? null);
         setWardNotice(d.notice || null);
-        // Only auto-fill when the mapping is unambiguous, and never over a
-        // ward the map already established.
-        if (d.autofillWard && wardSource !== "map_boundary") {
-          setWardNumber(String(d.autofillWard));
-          setWardSource("user_selected");
-        }
+        setSuggestedWard(d.suggestedWard ?? null);
       })
       .catch(() => {
         if (!stale) setWards([]);
@@ -319,8 +283,8 @@ export default function FileComplaintPage() {
     return () => {
       stale = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [areaId, gccLocalityId]);
+  }, [areaId]);
+
 
   /** Marks a field as citizen-edited so map autofill leaves it alone. */
   function markEdited(field: string) {
@@ -344,7 +308,25 @@ export default function FileComplaintPage() {
       const explicit = sel.via !== "initial";
       if (explicit && sel.address) {
         editedFields.current.clear();
+        const filled = new Set<string>();
         const { street, pincode } = sel.address;
+
+        // Match the geocoded area/locality text against the GCC area list.
+        // Only an exact normalised match is accepted — a near-miss would put
+        // the complaint in the wrong area.
+        const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, "");
+        for (const candidate of [sel.address.area, sel.address.locality]) {
+          if (!candidate) continue;
+          const hit = areas.find((a) => norm(a.name) === norm(candidate));
+          if (hit) {
+            setAreaId(String(hit.id));
+            filled.add("area");
+            break;
+          }
+        }
+        if (street) filled.add("street");
+        if (pincode && /^\d{6}$/.test(pincode)) filled.add("pincode");
+        setAutofilled(filled);
         // Only the complaint-location fields are touched. The complainant's own
         // address and PIN code in step 1 are never overwritten from the map.
         if (street && !editedFields.current.has("manualStreetName")) {
@@ -404,7 +386,7 @@ export default function FileComplaintPage() {
           });
         });
     },
-    []
+    [areas]
   );
 
   function goToStep(n: number) {
@@ -426,7 +408,6 @@ export default function FileComplaintPage() {
 
   function validateLocation(): string | null {
     if (!areaId) return "Please select the area.";
-    if (!gccLocalityId) return "Please select the locality.";
     if (manualStreetMode) {
       if (!manualStreetName.trim()) return "Please enter the street name.";
     } else if (!gccStreetId) {
@@ -494,7 +475,6 @@ export default function FileComplaintPage() {
           phoneNumber: phoneNumber || null,
           email: personEmail || null,
           areaId: Number(areaId),
-          gccLocalityId: Number(gccLocalityId),
           gccStreetId: manualStreetMode || !gccStreetId ? null : Number(gccStreetId),
           manualStreetName: manualStreetMode ? manualStreetName.trim() : null,
           streetType: manualStreetMode && streetType ? streetType : null,
@@ -543,6 +523,7 @@ export default function FileComplaintPage() {
     setManualStreetName("");
     setStreetType("");
     setGccStreetId("");
+    setAutofilled(new Set());
     setWardVerdict({ status: "idle" });
     setWardSource("");
     editedFields.current.clear();
@@ -754,186 +735,12 @@ export default function FileComplaintPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label className="form-label" htmlFor="area">Area</label>
-                <Combobox
-                  id="area"
-                  required
-                  noun="area"
-                  options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
-                  value={areaId}
-                  onChange={setAreaId}
-                  loading={areas.length === 0}
-                />
+            {/* ---- Map first: pinning fills in what it can ---- */}
+            <div className="mb-6">
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <span className="form-label mb-0">Point to the problem on the map</span>
+                <span className="text-xs text-ink-faint">Optional &mdash; you can type the details instead</span>
               </div>
-
-              <div>
-                <label className="form-label" htmlFor="gccLocality">Locality</label>
-                <Combobox
-                  id="gccLocality"
-                  required
-                  noun="locality"
-                  options={gccLocalities.map((l) => ({ value: String(l.id), label: l.name }))}
-                  value={gccLocalityId}
-                  onChange={setGccLocalityId}
-                  disabled={!areaId}
-                  loading={loadingLocalities}
-                  disabledPlaceholder="Select an area first"
-                />
-              </div>
-
-              {/* Street: pick from the GCC list, or type one that is missing */}
-              <div className={manualStreetMode ? "" : "sm:col-span-2"}>
-                <div className="flex items-baseline justify-between">
-                  <label className="form-label" htmlFor={manualStreetMode ? "manualStreet" : "street"}>
-                    Street
-                  </label>
-                  <button
-                    type="button"
-                    disabled={!gccLocalityId}
-                    onClick={() => {
-                      setManualStreetMode((v) => !v);
-                      setGccStreetId("");
-                      markEdited("manualStreetName");
-                    }}
-                    className="mb-1.5 inline-flex items-center gap-1 text-xs font-semibold text-navy transition hover:underline disabled:opacity-50"
-                  >
-                    <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
-                    {manualStreetMode ? "Choose from list" : "Enter street manually"}
-                  </button>
-                </div>
-
-                {manualStreetMode ? (
-                  <input
-                    id="manualStreet"
-                    className="form-input"
-                    placeholder="Street name (without the type)"
-                    value={manualStreetName}
-                    disabled={!gccLocalityId}
-                    onChange={(e) => {
-                      markEdited("manualStreetName");
-                      setManualStreetName(e.target.value);
-                    }}
-                  />
-                ) : (
-                  <Combobox
-                    id="street"
-                    noun="street"
-                    options={gccStreets.map((st) => ({ value: String(st.id), label: st.name }))}
-                    value={gccStreetId}
-                    onChange={setGccStreetId}
-                    disabled={!gccLocalityId}
-                    loading={loadingStreets}
-                    disabledPlaceholder="Select a locality first"
-                    emptyAction={
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          setManualStreetMode(true);
-                          setGccStreetId("");
-                        }}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy hover:underline"
-                      >
-                        <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
-                        Enter this street manually instead
-                      </button>
-                    }
-                  />
-                )}
-                {!manualStreetMode && gccLocalityId && gccStreets.length > 0 && (
-                  <p className="mt-1.5 text-xs text-ink-faint">
-                    {gccStreets.length} street{gccStreets.length === 1 ? "" : "s"} on record for this locality.
-                  </p>
-                )}
-              </div>
-
-              {/* Street type is a separate fact from the street name */}
-              {manualStreetMode && (
-                <div>
-                  <label className="form-label" htmlFor="streetType">Street type</label>
-                  <select
-                    id="streetType"
-                    className="form-input"
-                    value={streetType}
-                    onChange={(e) => setStreetType(e.target.value)}
-                  >
-                    <option value="">Select type (optional)</option>
-                    {STREET_TYPES.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="form-label" htmlFor="ward">Ward</label>
-                <Combobox
-                  id="ward"
-                  required
-                  noun="ward"
-                  options={wards.map((w) => ({
-                    value: String(w.wardNumber),
-                    label: `Ward ${w.wardNumber}`,
-                    hint: w.zoneName
-                  }))}
-                  value={wardNumber}
-                  onChange={(v) => {
-                    setWardNumber(v);
-                    setWardSource(v ? "user_selected" : "");
-                  }}
-                  loading={wards.length === 0}
-                />
-                {wardSource === "map_boundary" && selectedWard && (
-                  <p className="mt-1.5 inline-flex items-start gap-1.5 text-xs text-emerald-700">
-                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-                    Determined from the map pin.
-                  </p>
-                )}
-                {wardNotice && wardSource !== "map_boundary" && (
-                  <p className="mt-1.5 flex items-start gap-1.5 text-xs text-ink-muted">
-                    <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-ink-faint" aria-hidden="true" />
-                    {wardNotice}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="form-label" htmlFor="locationPincode">
-                  PIN code of this location <span className="normal-case text-ink-faint">(optional)</span>
-                </label>
-                <input
-                  id="locationPincode"
-                  inputMode="numeric"
-                  maxLength={6}
-                  className="form-input"
-                  value={locationPincode}
-                  onChange={(e) => {
-                    markEdited("locationPincode");
-                    setLocationPincode(e.target.value.replace(/\D/g, ""));
-                  }}
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="form-label" htmlFor="specificLoc">
-                  Specific location <span className="normal-case text-ink-faint">(door no. / landmark)</span>
-                </label>
-                <input
-                  id="specificLoc"
-                  className="form-input"
-                  value={specificLocation}
-                  onChange={(e) => {
-                    markEdited("specificLocation");
-                    setSpecificLocation(e.target.value);
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <span className="form-label">Mark the exact spot</span>
               <MapPicker
                 value={coords}
                 onChange={handleMapSelection}
@@ -958,7 +765,7 @@ export default function FileComplaintPage() {
                                 {wardVerdict.candidateWards
                                   ? ` (${wardVerdict.candidateWards.join(", ")})`
                                   : ""}
-                                , so please confirm the ward above.
+                                , so please confirm the ward below.
                               </>
                             )}
                           </span>
@@ -990,9 +797,193 @@ export default function FileComplaintPage() {
                         </p>
                       </div>
                     )}
+                    {autofilled.size > 0 && (
+                      <p className="mt-2 flex items-start gap-1.5 text-xs text-ink-muted">
+                        <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-ink-faint" aria-hidden="true" />
+                        Filled in from the map: {Array.from(autofilled).join(", ")}. Check them below
+                        and correct anything that looks wrong.
+                      </p>
+                    )}
                   </div>
                 }
               />
+            </div>
+
+            {/* ---- Address details ---- */}
+            <div className="mb-3 flex items-center gap-2 border-t border-canvas-border pt-5">
+              <span className="text-sm font-bold text-ink">Address details</span>
+              <span className="text-xs text-ink-faint">
+                {coords ? "Confirm or correct these" : "Fill these in, or drop a pin above"}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="area">Area</label>
+                <Combobox
+                  id="area"
+                  required
+                  noun="area"
+                  options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
+                  value={areaId}
+                  onChange={setAreaId}
+                  loading={areas.length === 0}
+                />
+              </div>
+
+              {/* Street: pick from the area's streets, or type one that is missing.
+                  Each option shows its locality, which is why there is no
+                  separate locality field. */}
+              <div>
+                <div className="flex items-baseline justify-between">
+                  <label className="form-label" htmlFor={manualStreetMode ? "manualStreet" : "street"}>
+                    Street
+                  </label>
+                  <button
+                    type="button"
+                    disabled={!areaId}
+                    onClick={() => {
+                      setManualStreetMode((v) => !v);
+                      setGccStreetId("");
+                      markEdited("manualStreetName");
+                    }}
+                    className="mb-1.5 inline-flex items-center gap-1 text-xs font-semibold text-navy transition hover:underline disabled:opacity-50"
+                  >
+                    <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
+                    {manualStreetMode ? "Choose from list" : "Enter street manually"}
+                  </button>
+                </div>
+
+                {manualStreetMode ? (
+                  <input
+                    id="manualStreet"
+                    className="form-input"
+                    placeholder="Street name (without the type)"
+                    value={manualStreetName}
+                    disabled={!areaId}
+                    onChange={(e) => {
+                      markEdited("manualStreetName");
+                      setManualStreetName(e.target.value);
+                    }}
+                  />
+                ) : (
+                  <Combobox
+                    id="street"
+                    noun="street"
+                    options={gccStreets.map((st) => ({
+                      value: String(st.id),
+                      label: st.name,
+                      hint: st.locality_name
+                    }))}
+                    value={gccStreetId}
+                    onChange={setGccStreetId}
+                    disabled={!areaId}
+                    loading={loadingStreets}
+                    disabledPlaceholder="Select an area first"
+                    emptyAction={
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setManualStreetMode(true);
+                          setGccStreetId("");
+                        }}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy hover:underline"
+                      >
+                        <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
+                        Enter this street manually instead
+                      </button>
+                    }
+                  />
+                )}
+                {!manualStreetMode && areaId && gccStreets.length > 0 && (
+                  <p className="mt-1.5 text-xs text-ink-faint">
+                    {gccStreets.length.toLocaleString("en-IN")} streets in this area.
+                  </p>
+                )}
+              </div>
+
+              {manualStreetMode && (
+                <div>
+                  <label className="form-label" htmlFor="streetType">Street type</label>
+                  <select
+                    id="streetType"
+                    className="form-input"
+                    value={streetType}
+                    onChange={(e) => setStreetType(e.target.value)}
+                  >
+                    <option value="">Select type (optional)</option>
+                    {STREET_TYPES.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="form-label" htmlFor="ward">Ward</label>
+                <Combobox
+                  id="ward"
+                  required
+                  noun="ward"
+                  options={wards.map((w) => ({
+                    value: String(w.wardNumber),
+                    label: w.label,
+                    hint: w.isPrimary ? `${w.zoneName} · most likely` : w.zoneName
+                  }))}
+                  value={wardNumber}
+                  onChange={(v) => {
+                    setWardNumber(v);
+                    setWardSource(v ? "user_selected" : "");
+                  }}
+                  loading={wards.length === 0}
+                />
+                {wardSource === "map_boundary" && selectedWard ? (
+                  <p className="mt-1.5 inline-flex items-start gap-1.5 text-xs text-emerald-700">
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                    Determined from the map pin.
+                  </p>
+                ) : (
+                  wardNotice && (
+                    <p className="mt-1.5 flex items-start gap-1.5 text-xs text-ink-muted">
+                      <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-ink-faint" aria-hidden="true" />
+                      {wardNotice}
+                    </p>
+                  )
+                )}
+              </div>
+
+              <div>
+                <label className="form-label" htmlFor="locationPincode">
+                  PIN code <span className="normal-case text-ink-faint">(optional)</span>
+                </label>
+                <input
+                  id="locationPincode"
+                  inputMode="numeric"
+                  maxLength={6}
+                  className="form-input"
+                  value={locationPincode}
+                  onChange={(e) => {
+                    markEdited("locationPincode");
+                    setLocationPincode(e.target.value.replace(/\D/g, ""));
+                  }}
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="form-label" htmlFor="specificLoc">
+                  Specific location <span className="normal-case text-ink-faint">(door no. / landmark)</span>
+                </label>
+                <input
+                  id="specificLoc"
+                  className="form-input"
+                  value={specificLocation}
+                  onChange={(e) => {
+                    markEdited("specificLocation");
+                    setSpecificLocation(e.target.value);
+                  }}
+                />
+              </div>
             </div>
 
             {submitError && (
@@ -1040,7 +1031,6 @@ export default function FileComplaintPage() {
 
             <ComplaintTypeSelector
               categories={categories}
-              frequent={frequent}
               selectedId={selectedSubtype ? selectedSubtype.id : null}
               loading={taxonomyLoading}
               source={taxonomySource}

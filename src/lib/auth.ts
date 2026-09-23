@@ -39,29 +39,21 @@ export function requireRole(session: JwtPayload | null, roles: UserRole[]): bool
 }
 
 /**
- * Session for a route that must not serve an unverified account.
+ * Session for a route that may only serve an account allowed to act.
  *
- * Re-checks verification against the database rather than trusting the token,
- * so revoking verification (or clearing the grandfather flag for a
- * re-verification campaign) takes effect immediately instead of waiting for
- * the 7-day token to expire.
- *
- * Returns null when there is no session or the account may not act yet.
+ * Re-checks the account against the database rather than trusting the token,
+ * so deactivating a user takes effect immediately instead of waiting for the
+ * 7-day token to expire.
  */
-export async function getVerifiedSession(): Promise<JwtPayload | null> {
+export async function getActiveSession(): Promise<JwtPayload | null> {
   const session = await getSessionFromCookies();
   if (!session) return null;
 
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT is_active, email_verified_at, email_verification_exempt
-     FROM users WHERE id = ? LIMIT 1`,
+    "SELECT is_active FROM users WHERE id = ? LIMIT 1",
     [session.userId]
   );
-  if (rows.length === 0) return null;
-
-  const u = rows[0];
-  if (!u.is_active) return null;
-  if (u.email_verified_at === null && u.email_verification_exempt !== 1) return null;
+  if (rows.length === 0 || !rows[0].is_active) return null;
 
   return session;
 }

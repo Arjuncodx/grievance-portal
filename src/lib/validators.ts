@@ -75,15 +75,6 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Password is required")
 });
 
-export const verifyEmailSchema = z.object({
-  email: emailSchema,
-  otp: otpSchema
-});
-
-export const resendVerificationSchema = z.object({
-  email: emailSchema
-});
-
 export const forgotPasswordRequestSchema = z.object({
   email: emailSchema
 });
@@ -152,7 +143,10 @@ export const complaintSubmitSchema = z
 
     // --- where the problem is (verified GCC reference data) -------------
     areaId: z.number().int().positive("Please select the area"),
-    gccLocalityId: z.number().int().positive("Please select the locality"),
+    // Derived server-side from the chosen street rather than picked: every
+    // street already belongs to exactly one locality. Null for a manually
+    // typed street, whose locality is genuinely unknown.
+    gccLocalityId: z.number().int().positive().nullable().optional(),
     gccStreetId: z.number().int().positive().nullable().optional(),
     manualStreetName: z.string().trim().max(255).nullable().optional(),
     streetType: z.string().trim().max(60).nullable().optional(),

@@ -91,23 +91,10 @@ export default function RegisterPage() {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Something went wrong.");
-        // The account may exist but the code could not be sent — let them go
-        // to the verification screen and resend rather than re-registering.
-        if (data.canResend && data.email) {
-          router.push(
-            `/verify-email?email=${encodeURIComponent(data.email)}` +
-              `&masked=${encodeURIComponent(data.maskedEmail || "")}`
-          );
-          return;
-        }
         setSubmitting(false);
         return;
       }
-      router.push(
-        `/verify-email?email=${encodeURIComponent(data.email)}` +
-          `&masked=${encodeURIComponent(data.maskedEmail || "")}` +
-          (data.cooldownRemaining ? `&cooldown=${data.cooldownRemaining}` : "")
-      );
+      router.push("/login?registered=1");
     } catch {
       setError("Something went wrong. Please try again.");
       setSubmitting(false);

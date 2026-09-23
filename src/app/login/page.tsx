@@ -23,9 +23,7 @@ import AuthHeroPanel from "@/components/AuthHeroPanel";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const successMessage = searchParams.get("verified")
-    ? "Email verified. Sign in to continue."
-    : searchParams.get("registered")
+  const successMessage = searchParams.get("registered")
     ? "Account created. Sign in to continue."
     : null;
 
@@ -47,12 +45,6 @@ function LoginForm() {
       });
       const data = await res.json();
       if (!res.ok) {
-        // Correct password on an unverified account: send them to finish
-        // verifying instead of leaving them at a dead end.
-        if (data.needsEmailVerification && data.redirectTo) {
-          router.push(data.redirectTo);
-          return;
-        }
         setError(data.error || "Invalid email or password.");
         setSubmitting(false);
         return;

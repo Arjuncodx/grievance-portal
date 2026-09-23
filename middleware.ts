@@ -11,7 +11,7 @@ const PROTECTED_PREFIXES: { prefix: string; roles: string[] }[] = [
   { prefix: "/profile", roles: ["citizen", "department_officer", "collector"] }
 ];
 
-const PUBLIC_ONLY_PREFIXES = ["/login", "/register", "/forgot-password", "/verify-email"];
+const PUBLIC_ONLY_PREFIXES = ["/login", "/register", "/forgot-password"];
 
 function roleHome(role: string): string {
   if (role === "citizen") return "/citizen";
@@ -28,19 +28,6 @@ export async function middleware(request: NextRequest) {
   const matchedProtected = PROTECTED_PREFIXES.find((p) => pathname.startsWith(p.prefix));
 
   if (matchedProtected) {
-    // Defence in depth. /api/auth/login refuses to mint a token for an
-    // unverified account, so this should be unreachable; it still holds if a
-    // token is ever issued another way. Tokens predating email verification
-    // omit the claim entirely and are left alone.
-    if (session && session.emailVerified === false) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/verify-email";
-      url.searchParams.set("email", session.email);
-      const res = NextResponse.redirect(url);
-      res.cookies.set("dcd_session", "", { path: "/", maxAge: 0 });
-      return res;
-    }
-
     if (!session) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
@@ -71,7 +58,6 @@ export const config = {
     "/profile/:path*",
     "/login",
     "/register",
-    "/forgot-password",
-    "/verify-email"
+    "/forgot-password"
   ]
 };

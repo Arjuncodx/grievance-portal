@@ -2,14 +2,15 @@
 
 /**
  * Complaint-type selection modelled on the GCC "Register Complaint" page:
- * a "Frequently Filed Complaint Types" dropdown at the top, then one dropdown
- * per category laid out in two columns on desktop and one on mobile.
+ * one dropdown per category, laid out in two columns on desktop and one on
+ * mobile.
  *
  * Exactly one subcomplaint can be active across the whole section. Choosing
- * from any dropdown clears the others, so the selection is never ambiguous —
- * the frequent list holds the same canonical subtype ids as the category
- * dropdowns, so picking "Non burning of Street lights" from either place
- * selects the identical record.
+ * from any dropdown clears the others, so the selection is never ambiguous.
+ *
+ * The "Other" category is this application's own addition, not part of GCC's
+ * published list — it exists so a citizen whose issue is not covered can still
+ * file, and it is always routed by an officer rather than automatically.
  */
 
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
@@ -40,7 +41,6 @@ export interface TaxonomySource {
 
 interface Props {
   categories: ComplaintCategory[];
-  frequent: Subcomplaint[];
   selectedId: number | null;
   onSelect: (subcomplaint: Subcomplaint | null) => void;
   source?: TaxonomySource | null;
@@ -49,7 +49,6 @@ interface Props {
 
 export default function ComplaintTypeSelector({
   categories,
-  frequent,
   selectedId,
   onSelect,
   source,
@@ -57,7 +56,6 @@ export default function ComplaintTypeSelector({
 }: Props) {
   const byId = new Map<number, Subcomplaint>();
   for (const c of categories) for (const s of c.subcomplaints) byId.set(s.id, s);
-  for (const f of frequent) if (!byId.has(f.id)) byId.set(f.id, f);
 
   const selected = selectedId != null ? byId.get(selectedId) ?? null : null;
   const selectedCategory = selected
@@ -72,7 +70,6 @@ export default function ComplaintTypeSelector({
   if (loading) {
     return (
       <div className="space-y-4">
-        <div className="skeleton h-11 w-full" />
         <div className="grid gap-4 sm:grid-cols-2">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="skeleton h-11" />
@@ -84,32 +81,6 @@ export default function ComplaintTypeSelector({
 
   return (
     <div>
-      {/* Frequently filed */}
-      {frequent.length > 0 && (
-        <div className="mb-6 rounded-2xl border border-gold-200 bg-gold-50 p-4">
-          <label htmlFor="frequent-complaint-type" className="form-label text-gold-800">
-            Frequently Filed Complaint Types
-          </label>
-          <select
-            id="frequent-complaint-type"
-            className="form-input bg-white"
-            value={selected && frequent.some((f) => f.id === selected.id) ? String(selected.id) : ""}
-            onChange={(e) => handleChange(e.target.value)}
-          >
-            <option value="">Choose</option>
-            {frequent.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-xs text-gold-800">
-            These are the most commonly reported issues. Anything else is in the
-            category lists below.
-          </p>
-        </div>
-      )}
-
       {/* Category dropdowns: two columns on desktop, one on mobile */}
       <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
         {categories.map((category) => {
@@ -178,8 +149,8 @@ export default function ComplaintTypeSelector({
         ) : (
           <p className="flex items-start gap-1.5 text-sm text-ink-muted">
             <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-faint" aria-hidden="true" />
-            Choose one complaint type &mdash; from the frequent list or from any one category.
-            Selecting a new one replaces the previous choice.
+            Choose one complaint type from any category below. Selecting a new one replaces
+            the previous choice. If nothing fits, use <span className="font-semibold text-ink">Other</span>.
           </p>
         )}
       </div>
