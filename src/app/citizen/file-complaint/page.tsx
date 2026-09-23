@@ -23,6 +23,7 @@ import {
 import Header from "@/components/Header";
 import { CITIZEN_NAV } from "@/lib/constants";
 import Footer from "@/components/Footer";
+import Combobox from "@/components/Combobox";
 import ComplaintTypeSelector, {
   ComplaintCategory,
   Subcomplaint,
@@ -127,6 +128,8 @@ export default function FileComplaintPage() {
   const [areas, setAreas] = useState<GccArea[]>([]);
   const [gccLocalities, setGccLocalities] = useState<GccLocality[]>([]);
   const [gccStreets, setGccStreets] = useState<GccStreet[]>([]);
+  const [loadingLocalities, setLoadingLocalities] = useState(false);
+  const [loadingStreets, setLoadingStreets] = useState(false);
   const [areaId, setAreaId] = useState("");
   const [gccLocalityId, setGccLocalityId] = useState("");
   const [gccStreetId, setGccStreetId] = useState("");
@@ -235,6 +238,7 @@ export default function FileComplaintPage() {
       return;
     }
     let stale = false;
+    setLoadingLocalities(true);
     fetch(`/api/locations/gcc-localities?areaId=${areaId}`)
       .then((r) => r.json())
       .then((d) => {
@@ -242,6 +246,9 @@ export default function FileComplaintPage() {
       })
       .catch(() => {
         if (!stale) setGccLocalities([]);
+      })
+      .finally(() => {
+        if (!stale) setLoadingLocalities(false);
       });
     return () => {
       stale = true;
@@ -256,6 +263,7 @@ export default function FileComplaintPage() {
       return;
     }
     let stale = false;
+    setLoadingStreets(true);
     fetch(`/api/locations/gcc-streets?localityId=${gccLocalityId}`)
       .then((r) => r.json())
       .then((d) => {
@@ -270,6 +278,9 @@ export default function FileComplaintPage() {
           setGccStreets([]);
           setManualStreetMode(true);
         }
+      })
+      .finally(() => {
+        if (!stale) setLoadingStreets(false);
       });
     return () => {
       stale = true;
@@ -746,35 +757,30 @@ export default function FileComplaintPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label className="form-label" htmlFor="area">Area</label>
-                <select
+                <Combobox
                   id="area"
                   required
-                  className="form-input"
+                  noun="area"
+                  options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
                   value={areaId}
-                  onChange={(e) => setAreaId(e.target.value)}
-                >
-                  <option value="">Select area</option>
-                  {areas.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
+                  onChange={setAreaId}
+                  loading={areas.length === 0}
+                />
               </div>
 
               <div>
                 <label className="form-label" htmlFor="gccLocality">Locality</label>
-                <select
+                <Combobox
                   id="gccLocality"
                   required
-                  className="form-input"
+                  noun="locality"
+                  options={gccLocalities.map((l) => ({ value: String(l.id), label: l.name }))}
                   value={gccLocalityId}
+                  onChange={setGccLocalityId}
                   disabled={!areaId}
-                  onChange={(e) => setGccLocalityId(e.target.value)}
-                >
-                  <option value="">{areaId ? "Select locality" : "Select an area first"}</option>
-                  {gccLocalities.map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
-                  ))}
-                </select>
+                  loading={loadingLocalities}
+                  disabledPlaceholder="Select an area first"
+                />
               </div>
 
               {/* Street: pick from the GCC list, or type one that is missing */}
@@ -811,24 +817,30 @@ export default function FileComplaintPage() {
                     }}
                   />
                 ) : (
-                  <select
+                  <Combobox
                     id="street"
-                    className="form-input"
+                    noun="street"
+                    options={gccStreets.map((st) => ({ value: String(st.id), label: st.name }))}
                     value={gccStreetId}
+                    onChange={setGccStreetId}
                     disabled={!gccLocalityId}
-                    onChange={(e) => setGccStreetId(e.target.value)}
-                  >
-                    <option value="">
-                      {!gccLocalityId
-                        ? "Select a locality first"
-                        : gccStreets.length === 0
-                        ? "No streets on record — enter manually"
-                        : "Select street"}
-                    </option>
-                    {gccStreets.map((st) => (
-                      <option key={st.id} value={st.id}>{st.name}</option>
-                    ))}
-                  </select>
+                    loading={loadingStreets}
+                    disabledPlaceholder="Select a locality first"
+                    emptyAction={
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setManualStreetMode(true);
+                          setGccStreetId("");
+                        }}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy hover:underline"
+                      >
+                        <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
+                        Enter this street manually instead
+                      </button>
+                    }
+                  />
                 )}
                 {!manualStreetMode && gccLocalityId && gccStreets.length > 0 && (
                   <p className="mt-1.5 text-xs text-ink-faint">
@@ -857,21 +869,22 @@ export default function FileComplaintPage() {
 
               <div>
                 <label className="form-label" htmlFor="ward">Ward</label>
-                <select
+                <Combobox
                   id="ward"
                   required
-                  className="form-input"
+                  noun="ward"
+                  options={wards.map((w) => ({
+                    value: String(w.wardNumber),
+                    label: `Ward ${w.wardNumber}`,
+                    hint: w.zoneName
+                  }))}
                   value={wardNumber}
-                  onChange={(e) => {
-                    setWardNumber(e.target.value);
-                    setWardSource(e.target.value ? "user_selected" : "");
+                  onChange={(v) => {
+                    setWardNumber(v);
+                    setWardSource(v ? "user_selected" : "");
                   }}
-                >
-                  <option value="">Select ward</option>
-                  {wards.map((w) => (
-                    <option key={w.wardNumber} value={w.wardNumber}>{w.label}</option>
-                  ))}
-                </select>
+                  loading={wards.length === 0}
+                />
                 {wardSource === "map_boundary" && selectedWard && (
                   <p className="mt-1.5 inline-flex items-start gap-1.5 text-xs text-emerald-700">
                     <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
