@@ -39,12 +39,24 @@ mysql -u root -p < schema.sql
 cp .env.example .env
 # then edit .env with your DB credentials, JWT secret, SMTP creds, OpenAI key, etc.
 
-# 4. (Optional) Seed 3 sample accounts — one per role, password: Passw0rd!
+# 4. Apply migrations (idempotent; safe to re-run)
+node scripts/migrate.js
+
+# 5. Import + load the verified GCC reference data (see section 8)
+node scripts/import-gcc-reference.js --streets
+node scripts/import-ward-boundaries.js
+node scripts/seed-gcc-reference.js
+
+# 6. (Optional) Seed 3 sample accounts — one per role, password: Passw0rd!
 node scripts/seed-users.js
 
-# 5. Run the dev server
+# 7. Run the dev server
 npm run dev
 ```
+
+`node scripts/migrate.js --status` lists applied and pending migrations;
+`--dry-run` prints the SQL without executing it. Migrations are additive — none
+of them drops a column or table holding complaint data.
 
 The app will be available at http://localhost:3000. Visiting `/` redirects
 to `/login` if you're not signed in, or to your role's home page if you are.
@@ -61,12 +73,15 @@ You can also just register fresh accounts via `/register`.
 
 ### Dev-mode OTPs
 
-With `NEXT_PUBLIC_DEV_SHOW_OTP=true` in `.env` (the default in
-`.env.example`), every OTP-sending endpoint also returns the plaintext OTP
-in the API response, and the relevant pages show it in a "[Dev mode]"
-banner — handy for testing the OTP flows without a working SMTP/SMS
-gateway. **Set this to `false` (or remove it) before deploying to
-production.**
+With `NEXT_PUBLIC_DEV_SHOW_OTP=true` **and** `NODE_ENV` set to something
+other than `production`, OTP-sending endpoints also return the plaintext code
+in the API response — handy for testing without a mail gateway.
+
+Both conditions are required. Every route that can echo a code goes through
+`devOtpForResponse()` in `src/lib/otp.ts`, which returns `undefined` whenever
+`NODE_ENV === "production"`, so leaving the flag set to `true` by mistake in a
+production deployment still cannot leak a code through an API response or the
+UI.
 
 ## 3. Project Structure
 
@@ -149,6 +164,13 @@ curl -X POST http://localhost:3000/api/auth/login \
 | POST | `/api/profile/change-password` | `{ currentPassword, newPassword, confirmPassword }` |
 | POST | `/api/profile/photo` | `multipart/form-data`, field `photo` (jpg/png, ≤2MB) |
 
+### Email verification
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/auth/verify-email` | Confirm a registration code (consumes it atomically) |
+| POST | `/api/auth/verify-email/resend` | Issue a new code, subject to the 60s cooldown |
+
 ### Reference data (used by both the profile and complaint forms)
 
 | Method | Endpoint | Notes |
@@ -200,14 +222,161 @@ curl -X POST http://localhost:3000/api/complaints \
 
 ## 7. Map Provider
 
-The complaint-location map (`src/components/MapPicker.tsx`) uses Leaflet.js
-with free OpenStreetMap tiles — no API key required. If you later obtain a
-Google Maps API key, swap this component's internals for the Google Maps
-JS API (`@vis.gl/react-google-maps` or similar); the parent form only
-depends on the `{ value: {lat,lng}, onChange }` prop contract, so nothing
-else needs to change.
+`src/components/MapPicker.tsx` supports two providers behind one contract and
+chooses at runtime:
 
-## 8. What's Next
+| | With `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Without it |
+|---|---|---|
+| Map, click-to-place, drag pin | Google Maps | Leaflet + OpenStreetMap |
+| Address search / autocomplete | yes | no |
+| Reverse geocoding (address fill) | yes | no — citizen types the address |
+| "Use my location" | yes | yes |
+| Ward + serviceability check | yes | yes (uses this app's own polygons) |
+
+When no key is set, the form says so rather than silently offering less.
+
+Google Maps needs the **Maps JavaScript API**, **Places API** and **Geocoding
+API** enabled, plus an active billing account. The monthly free allowance is
+real but limited and Google has changed its shape — check
+<https://mapsplatform.google.com/pricing/> before deploying, and do not assume
+it is free. Budget alerts only notify; to actually cap spend, set per-API quota
+limits under *APIs & Services → Quotas*. Restrict the browser key by HTTP
+referrer and to those three APIs. If you later add server-side Google calls,
+use a separate IP-restricted key in a non-`NEXT_PUBLIC_` variable.
+
+### Design notes
+
+* The **pin is the complaint location**. A reverse-geocode result contributes
+  address text only, never coordinates — geocoders answer with the centre of a
+  road or postcode, which would move the complaint off the marked spot.
+* Every async lookup carries the sequence number of the selection that started
+  it; a stale response is discarded, so a slow reply for an old pin cannot
+  overwrite a newer one.
+* Geocoding runs on `dragend` / click / search commit, never on intermediate
+  positions while the marker is moving.
+* Map autofill only ever touches the **complaint location** fields. The
+  complainant's own address and PIN code are never overwritten from the map,
+  and are no longer prefilled into the location step from their profile.
+
+## 8. Reference data and its provenance
+
+All reference data is imported by script, stored in `data/`, and recorded in the
+`reference_data_sources` table with its source URL and fetch date. Nothing in
+this section is hand-authored.
+
+### Complaint types — verified
+
+`node scripts/import-gcc-reference.js` reads the category and subcomplaint
+`<select>` elements from the GCC grievance portal:
+
+> <https://erp.chennaicorporation.gov.in/pgr/citizen/BeforeReg.do>
+
+Imported: **17 categories, 327 subcomplaints, 5 "frequently filed" entries**,
+preserving GCC's own grouping, wording and ordering. `scripts/seed-gcc-reference.js`
+loads them into `complaint_categories` / `complaint_subtypes`, keyed on GCC's
+own stable option ids.
+
+**Department routing is only partly known.** GCC does not publish its internal
+routing on the citizen page, so the seeder maps only the 8 categories with an
+unambiguous counterpart in this app's `departments` table. The remaining 9
+(Public Toilet, Voter ID, General, Road and Footpath, Air Quality, Flood, and
+the three MEGA STREETS phases — **239 of 327 subcomplaints**) are stored with
+`mapping_status = 'unmapped'` and `department_id = NULL`. Complaints of those
+types are routed to the fallback department **and flagged
+`needs_manual_review`**, and both the form and the confirmation screen tell the
+citizen an officer will route it. Add verified routings to
+`CATEGORY_DEPARTMENT` in `scripts/seed-gcc-reference.js` and re-run the seeder.
+
+### Areas, localities, streets — verified
+
+The same script walks GCC's own `loadComboAjax.jsp` boundary endpoint:
+**250 areas → 4,883 localities → 53,800 streets**. These replace the previous
+placeholder tables (32 localities with exactly 6 streets each), which are kept
+so existing complaints still resolve.
+
+A citizen can always choose **"Enter street manually"** and supply a street name
+plus an optional street type; the two are stored separately in
+`manual_street_name` and `street_type`.
+
+### Wards — from boundary polygons, NOT an official GCC feed
+
+`node scripts/import-ward-boundaries.js` downloads GCC ward polygons and writes
+`data/boundaries/gcc-wards.geojson` plus a `.meta.json` recording provenance.
+
+* Default source: the **DataMeet** `Municipal_Spatial_Data` community dataset.
+  All 200 wards and 15 zones are present, but **it is not an official Greater
+  Chennai Corporation publication** and carries no accuracy guarantee. The app
+  says so wherever a ward is shown as map-derived.
+* GCC's own ArcGIS server (`gis.chennaicorporation.gov.in`) was **not** used:
+  its TLS certificate had expired at import time, and fetching it would have
+  meant disabling certificate verification. To swap in an official layer:
+  `node scripts/import-ward-boundaries.js --source ./official-wards.geojson`.
+* Ward is resolved **by point-in-polygon** on the pin coordinates. It is never
+  derived from a PIN code, the nearest ward centroid, or geocoded address text —
+  all of which produce confident-looking wrong answers near a ward edge.
+* The union of the 200 polygons **is** the municipal boundary, so the same test
+  answers service eligibility. A rectangular map viewport is never used for this.
+* If the boundary file is missing, `/api/locations/resolve-ward` returns
+  `unavailable` and the form asks the citizen to pick the ward instead of
+  guessing.
+
+**This import corrected existing data.** The `zones` table shipped with ward
+ranges that disagreed with the boundary polygons for **124 of 200 wards** (it
+placed T. Nagar in Teynampet rather than Kodambakkam, and so on). `zone_wards`
+now holds the authoritative per-ward mapping and `zones.ward_start/ward_end` are
+refreshed from it. Note that Adyar (170–182) and Perungudi (168–191) have
+**overlapping ward spans** in the source data, which a plain start/end range
+cannot represent — validation therefore uses `zone_wards`, and the discrepancy
+is recorded in `data/boundaries/gcc-wards.meta.json`.
+
+### Area → ward mapping — deliberately absent
+
+`locality_wards` exists but ships **empty**. No authoritative area/locality → ward
+mapping is obtainable: GCC's boundary chain carries no ward numbers, its GIS
+server was unreachable, and its locality lists have no coordinates to place
+inside a ward polygon.
+
+So `/api/locations/wards` returns `filtered: false` and every GCC ward, labelled
+`"Ward N — <zone>"` — the zone is real, and no ward *name* is invented because
+GCC publishes none. The form states plainly that no verified area-to-ward
+mapping is loaded and that the map pin is the reliable way to determine the
+ward. Populate `locality_wards` and the dropdown filters itself automatically,
+auto-filling only when a locality maps to exactly one ward.
+
+## 9. Email verification
+
+Registration creates a **pending, unverified account** and emails a 6-digit
+code. Until it is verified the account holds no session and reaches no protected
+route or API.
+
+* Codes come from `crypto.randomInt` (not `Math.random`), are stored only as
+  bcrypt hashes, expire after 10 minutes, allow 5 attempts, and are superseded
+  when a new one is issued.
+* A correct code is **consumed atomically** by a conditional `UPDATE`, so two
+  concurrent requests carrying the same code cannot both succeed.
+* Resend is limited to one code per 60 seconds, with per-IP and per-email rate
+  limits on top of the per-code attempt counter.
+* `email_verify` is a distinct OTP purpose, never shared with password reset or
+  mobile verification.
+* If the SMTP server does not accept the message, the API returns an error and
+  discards the unusable code. It **never** reports "email sent" for a failed
+  submission. Registration is refused outright when SMTP is unconfigured.
+* Verifying an email grants **no role or permission** — it only sets
+  `email_verified_at`. Authorisation still comes from the account's role.
+
+### Existing accounts
+
+The migration does **not** mark existing emails verified. Accounts present when
+`001_email_verification.sql` ran keep `email_verified_at = NULL` and are instead
+flagged `email_verification_exempt = 1`, which grandfathers them so they can
+still sign in while remaining distinguishable from genuinely verified accounts.
+To require everyone to re-verify:
+
+```sql
+UPDATE users SET email_verification_exempt = 0 WHERE email_verified_at IS NULL;
+```
+
+## 10. What's Next
 
 The `department_officer` (`/officer`) and `collector` (`/collector`)
 dashboards are currently placeholder pages, gated by the same

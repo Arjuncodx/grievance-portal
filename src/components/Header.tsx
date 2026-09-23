@@ -1,18 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut, UserRound } from "lucide-react";
 import Logo from "@/components/Logo";
 
+export interface HeaderNavItem {
+  href: string;
+  label: string;
+}
+
 interface HeaderProps {
   userName?: string | null;
   homeHref?: string;
+  /**
+   * Primary destinations for the signed-in role. The citizen landing page no
+   * longer repeats "File a complaint" / "Track status" in its body, so these
+   * links are how those pages are reached.
+   */
+  nav?: HeaderNavItem[];
 }
 
-export default function Header({ userName, homeHref = "/" }: HeaderProps) {
+export default function Header({ userName, homeHref = "/", nav = [] }: HeaderProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -69,6 +81,28 @@ export default function Header({ userName, homeHref = "/" }: HeaderProps) {
           </span>
         </Link>
 
+        {nav.length > 0 && (
+          <nav aria-label="Primary" className="hidden items-center gap-1 sm:flex">
+            {nav.map(({ href, label }) => {
+              const active = pathname === href || pathname.startsWith(href + "/");
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={active ? "page" : undefined}
+                  className={`rounded-xl px-3.5 py-2 text-sm font-semibold transition ${
+                    active
+                      ? "bg-navy-50 text-navy"
+                      : "text-ink-muted hover:bg-navy-50/60 hover:text-navy"
+                  }`}
+                >
+                  {label}
+                </Link>
+              );
+            })}
+          </nav>
+        )}
+
         {userName !== undefined && (
           <div className="relative" ref={menuRef}>
             <button
@@ -96,6 +130,22 @@ export default function Header({ userName, homeHref = "/" }: HeaderProps) {
                 role="menu"
                 className="absolute right-0 z-20 mt-2 w-56 origin-top-right animate-scale-in overflow-hidden rounded-2xl border border-canvas-border bg-white p-1.5 shadow-lift"
               >
+                {nav.length > 0 && (
+                  <div className="sm:hidden">
+                    {nav.map(({ href, label }) => (
+                      <Link
+                        key={href}
+                        href={href}
+                        role="menuitem"
+                        className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-ink transition hover:bg-navy-50 hover:text-navy"
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        {label}
+                      </Link>
+                    ))}
+                    <div className="my-1.5 border-t border-canvas-border" />
+                  </div>
+                )}
                 <Link
                   href="/profile"
                   role="menuitem"

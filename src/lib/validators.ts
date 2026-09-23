@@ -75,6 +75,15 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Password is required")
 });
 
+export const verifyEmailSchema = z.object({
+  email: emailSchema,
+  otp: otpSchema
+});
+
+export const resendVerificationSchema = z.object({
+  email: emailSchema
+});
+
 export const forgotPasswordRequestSchema = z.object({
   email: emailSchema
 });
@@ -128,31 +137,52 @@ export const changePasswordSchema = z
 // ---------------------------------------------------------------------
 // Complaint
 // ---------------------------------------------------------------------
-export const complaintSubmitSchema = z.object({
-  initials: z.string().trim().max(10).optional().default(""),
-  firstName: z.string().trim().min(1, "First name is required").max(100),
-  lastName: z.string().trim().max(100).optional().default(""),
-  gender: z.enum(["Male", "Female", "Transgender"]),
-  streetAddress: z.string().trim().min(1, "Street address is required").max(255),
-  pincode: pincodeSchema,
-  mobileNumber: z.union([mobileSchema, z.literal("")]).optional().nullable(),
-  phoneNumber: z.string().trim().max(15).optional().nullable(),
-  email: z.union([emailSchema, z.literal("")]).optional().nullable(),
+export const complaintSubmitSchema = z
+  .object({
+    // --- complainant's own details -------------------------------------
+    initials: z.string().trim().max(10).optional().default(""),
+    firstName: z.string().trim().min(1, "First name is required").max(100),
+    lastName: z.string().trim().max(100).optional().default(""),
+    gender: z.enum(["Male", "Female", "Transgender"]),
+    streetAddress: z.string().trim().min(1, "Street address is required").max(255),
+    pincode: pincodeSchema,
+    mobileNumber: z.union([mobileSchema, z.literal("")]).optional().nullable(),
+    phoneNumber: z.string().trim().max(15).optional().nullable(),
+    email: z.union([emailSchema, z.literal("")]).optional().nullable(),
 
-  zoneId: z.number().int().positive(),
-  wardNumber: z.number().int().positive(),
-  localityId: z.number().int().positive(),
-  streetId: z.number().int().positive(),
-  specificLocation: z.string().trim().max(500).optional().nullable(),
-  latitude: z.number().optional().nullable(),
-  longitude: z.number().optional().nullable(),
+    // --- where the problem is (verified GCC reference data) -------------
+    areaId: z.number().int().positive("Please select the area"),
+    gccLocalityId: z.number().int().positive("Please select the locality"),
+    gccStreetId: z.number().int().positive().nullable().optional(),
+    manualStreetName: z.string().trim().max(255).nullable().optional(),
+    streetType: z.string().trim().max(60).nullable().optional(),
 
-  departmentId: z.number().int().positive().optional().nullable(),
-  complaintTypeId: z.number().int().positive(),
-  otherDescription: z.string().trim().max(400).optional().nullable(),
+    wardNumber: z.number().int().min(1).max(200),
+    wardSource: z.enum(["map_boundary", "user_selected"]).optional().default("user_selected"),
+    zoneId: z.number().int().positive().nullable().optional(),
+    locationPincode: z.union([pincodeSchema, z.literal("")]).nullable().optional(),
 
-  title: z.string().trim().min(1, "Title is required").max(200),
-  description: z.string().trim().min(1, "Details are required").max(400),
-  mediaPath: z.string().trim().optional().nullable(),
-  isAnonymous: z.boolean().optional().default(false)
-});
+    specificLocation: z.string().trim().max(500).optional().nullable(),
+    latitude: z.number().min(-90).max(90).optional().nullable(),
+    longitude: z.number().min(-180).max(180).optional().nullable(),
+
+    // --- what the problem is -------------------------------------------
+    complaintSubtypeId: z.number().int().positive("Please select a complaint type"),
+
+    title: z.string().trim().min(1, "Title is required").max(200),
+    description: z.string().trim().min(1, "Details are required").max(400),
+    mediaPath: z.string().trim().optional().nullable(),
+    isAnonymous: z.boolean().optional().default(false)
+  })
+  .refine(
+    (d) => Boolean(d.gccStreetId) || Boolean(d.manualStreetName && d.manualStreetName.length > 0),
+    {
+      message: "Select a street from the list, or enter one manually",
+      path: ["gccStreetId"]
+    }
+  )
+  .refine((d) => !(d.gccStreetId && d.manualStreetName), {
+    // Exactly one of the two, so the stored street is never ambiguous.
+    message: "Provide either a listed street or a manually entered one, not both",
+    path: ["manualStreetName"]
+  });

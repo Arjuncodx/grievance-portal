@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import pool from "@/lib/db";
 import { forgotPasswordRequestSchema } from "@/lib/validators";
-import { createOtp } from "@/lib/otp";
+import { createOtp, devOtpForResponse } from "@/lib/otp";
 import { sendMail, otpEmailHtml } from "@/lib/mailer";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { RowDataPacket } from "mysql2";
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
       await sendMail(email, "Your password reset OTP", otpEmailHtml(result.otp, "password reset"));
 
-      const devOtp = process.env.NEXT_PUBLIC_DEV_SHOW_OTP === "true" ? result.otp : undefined;
+      const devOtp = devOtpForResponse(result.otp);
       return NextResponse.json({ message: GENERIC_MESSAGE, devOtp });
     }
 

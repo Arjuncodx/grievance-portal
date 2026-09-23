@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import pool from "@/lib/db";
 import { getSessionFromCookies } from "@/lib/auth";
 import { mobileSchema } from "@/lib/validators";
-import { createOtp } from "@/lib/otp";
+import { createOtp, devOtpForResponse } from "@/lib/otp";
 import { sendMail, otpEmailHtml } from "@/lib/mailer";
 import { RowDataPacket } from "mysql2";
 
@@ -34,6 +34,6 @@ export async function POST(req: NextRequest) {
 
   await sendMail(session.email, "Verify your mobile number", otpEmailHtml(result.otp, "mobile number verification"));
 
-  const devOtp = process.env.NEXT_PUBLIC_DEV_SHOW_OTP === "true" ? result.otp : undefined;
+  const devOtp = devOtpForResponse(result.otp);
   return NextResponse.json({ message: "OTP sent.", devOtp });
 }

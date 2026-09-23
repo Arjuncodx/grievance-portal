@@ -7,6 +7,7 @@ import { setAuthCookie } from "@/lib/auth";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { RowDataPacket } from "mysql2";
 import { UserRow } from "@/types";
+import { maskEmail } from "@/lib/email-mask";
 
 const GENERIC_ERROR = "Invalid email or password.";
 
@@ -54,11 +55,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: GENERIC_ERROR }, { status: 401 });
     }
 
+    // An unverified account gets NO session cookie. The password was correct,
+    // so telling them to finish verification leaks nothing they do not already
+    // know, and it lets them resume instead of being stuck at a dead end.
+    const isVerified = user.email_verified_at !== null;
+    const isExempt = user.email_verification_exempt === 1;
+    if (!isVerified && !isExempt) {
+      return NextResponse.json(
+        {
+          error: "Please verify your email address before signing in.",
+          needsEmailVerification: true,
+          email: user.email,
+          maskedEmail: maskEmail(user.email),
+          redirectTo: `/verify-email?email=${encodeURIComponent(user.email)}`
+        },
+        { status: 403 }
+      );
+    }
+
     const token = await signToken({
       userId: user.id,
       email: user.email,
       role: user.role,
-      departmentId: user.department_id
+      departmentId: user.department_id,
+      emailVerified: true
     });
 
     let redirectTo = "/login";

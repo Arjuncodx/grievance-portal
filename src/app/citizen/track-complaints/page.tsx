@@ -14,6 +14,7 @@ import {
   Tag
 } from "lucide-react";
 import Header from "@/components/Header";
+import { CITIZEN_NAV } from "@/lib/constants";
 import Footer from "@/components/Footer";
 import StatusBadge from "@/components/StatusBadge";
 import StatusTracker from "@/components/StatusTracker";
@@ -86,7 +87,7 @@ export default function TrackComplaintsPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
-      <Header userName={me?.email} homeHref="/citizen" />
+      <Header userName={me?.email} homeHref="/citizen" nav={CITIZEN_NAV} />
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8 sm:px-6 sm:py-10">
         <div className="mb-7">
           <Link

@@ -1,96 +1,165 @@
 import { NextRequest, NextResponse } from "next/server";
 import pool, { withTransaction } from "@/lib/db";
-import { getSessionFromCookies } from "@/lib/auth";
+import { getSessionFromCookies, getVerifiedSession } from "@/lib/auth";
 import { complaintSubmitSchema } from "@/lib/validators";
 import { generateUniqueComplaintCode } from "@/lib/complaint-code";
-import { classifyComplaint } from "@/lib/ai-classifier";
+import { resolveWard } from "@/lib/wards";
+import { DEFAULT_FALLBACK_DEPARTMENT } from "@/lib/constants";
 import { RowDataPacket, ResultSetHeader } from "mysql2";
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getSessionFromCookies();
+    // An account that has not proved its email address may not file.
+    const session = await getVerifiedSession();
+    if (!session) {
+      return NextResponse.json(
+        { error: "Please sign in with a verified account to file a complaint." },
+        { status: 401 }
+      );
+    }
+
     const body = await req.json();
     const parsed = complaintSubmitSchema.safeParse(body);
-
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const data = parsed.data;
 
-    // Validate ward number against the selected zone's real range.
-    const [zoneRows] = await pool.query<RowDataPacket[]>(
-      "SELECT ward_start, ward_end FROM zones WHERE id = ?",
-      [data.zoneId]
+    // ---- Re-validate every location relationship server-side -------------
+    // The client already enforces these, which is exactly why the server must
+    // not trust them.
+    const [localityRows] = await pool.query<RowDataPacket[]>(
+      `SELECT l.id, l.name, l.area_id, a.name AS area_name
+         FROM gcc_localities l JOIN gcc_areas a ON a.id = l.area_id
+        WHERE l.id = ? LIMIT 1`,
+      [data.gccLocalityId]
     );
-    if (zoneRows.length === 0) {
-      return NextResponse.json({ error: "Invalid zone selected." }, { status: 400 });
+    if (localityRows.length === 0) {
+      return NextResponse.json({ error: "Selected locality is not recognised." }, { status: 400 });
     }
-    const { ward_start, ward_end } = zoneRows[0];
-    if (data.wardNumber < ward_start || data.wardNumber > ward_end) {
+    if (localityRows[0].area_id !== data.areaId) {
       return NextResponse.json(
-        { error: `Ward number must be between ${ward_start} and ${ward_end} for the selected zone.` },
+        { error: "The selected locality does not belong to the selected area." },
         { status: 400 }
       );
     }
 
-    // Validate locality belongs to zone, street belongs to locality.
-    const [localityRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id FROM localities WHERE id = ? AND zone_id = ?",
-      [data.localityId, data.zoneId]
-    );
-    if (localityRows.length === 0) {
-      return NextResponse.json({ error: "Selected locality does not belong to the selected zone." }, { status: 400 });
-    }
-    const [streetRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id FROM streets WHERE id = ? AND locality_id = ?",
-      [data.streetId, data.localityId]
-    );
-    if (streetRows.length === 0) {
-      return NextResponse.json({ error: "Selected street does not belong to the selected locality." }, { status: 400 });
+    if (data.gccStreetId) {
+      const [streetRows] = await pool.query<RowDataPacket[]>(
+        "SELECT id FROM gcc_streets WHERE id = ? AND locality_id = ? LIMIT 1",
+        [data.gccStreetId, data.gccLocalityId]
+      );
+      if (streetRows.length === 0) {
+        return NextResponse.json(
+          { error: "The selected street does not belong to the selected locality." },
+          { status: 400 }
+        );
+      }
     }
 
-    // Resolve complaint type + department, handling "Others" via AI /
-    // keyword classification.
-    const [typeRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id, name, department_id FROM complaint_types WHERE id = ?",
-      [data.complaintTypeId]
+    // Ward must be a real GCC ward; its zone comes from the ward, not the client.
+    const [wardRows] = await pool.query<RowDataPacket[]>(
+      `SELECT zw.ward_number, zw.zone_id, z.zone_name
+         FROM zone_wards zw JOIN zones z ON z.id = zw.zone_id
+        WHERE zw.ward_number = ? LIMIT 1`,
+      [data.wardNumber]
     );
-    if (typeRows.length === 0) {
+    if (wardRows.length === 0) {
+      return NextResponse.json({ error: "Selected ward is not a Greater Chennai Corporation ward." }, { status: 400 });
+    }
+    const zoneId = wardRows[0].zone_id as number;
+
+    // If coordinates were supplied, confirm them against the boundary data and
+    // record how the ward was actually established.
+    let wardSource: "map_boundary" | "user_selected" = data.wardSource ?? "user_selected";
+    if (data.latitude != null && data.longitude != null) {
+      const lookup = resolveWard(data.latitude, data.longitude);
+      if (lookup.status === "outside_boundary") {
+        return NextResponse.json(
+          {
+            error:
+              "The marked location is outside the Greater Chennai Corporation area, so this " +
+              "complaint cannot be accepted here."
+          },
+          { status: 400 }
+        );
+      }
+      if (lookup.status === "resolved") {
+        if (lookup.wardNo !== data.wardNumber && !lookup.ambiguous) {
+          // Trust the geometry over the submitted number.
+          wardSource = "map_boundary";
+          data.wardNumber = lookup.wardNo;
+        } else if (lookup.wardNo === data.wardNumber) {
+          wardSource = "map_boundary";
+        }
+      } else {
+        // Boundary data unavailable — the citizen's choice stands, labelled as such.
+        wardSource = "user_selected";
+      }
+    } else {
+      wardSource = "user_selected";
+    }
+
+    const finalZoneId =
+      data.wardNumber === (wardRows[0].ward_number as number)
+        ? zoneId
+        : (
+            await pool.query<RowDataPacket[]>(
+              "SELECT zone_id FROM zone_wards WHERE ward_number = ? LIMIT 1",
+              [data.wardNumber]
+            )
+          )[0][0]?.zone_id ?? zoneId;
+
+    // ---- Complaint type + department routing -----------------------------
+    const [subRows] = await pool.query<RowDataPacket[]>(
+      `SELECT s.id, s.label, s.department_id, s.mapping_status, c.name AS category_name
+         FROM complaint_subtypes s
+         JOIN complaint_categories c ON c.id = s.category_id
+        WHERE s.id = ? AND s.is_active = 1 LIMIT 1`,
+      [data.complaintSubtypeId]
+    );
+    if (subRows.length === 0) {
       return NextResponse.json({ error: "Invalid complaint type." }, { status: 400 });
     }
-    const complaintType = typeRows[0];
+    const subtype = subRows[0];
 
-    let departmentId = complaintType.department_id as number;
+    let departmentId = subtype.department_id as number | null;
     let needsManualReview = false;
 
-    if (complaintType.name === "Others") {
-      const textToClassify = data.otherDescription?.trim() || data.description;
-      const classification = await classifyComplaint(textToClassify);
-      needsManualReview = classification.needsManualReview;
-
-      const [deptRows] = await pool.query<RowDataPacket[]>(
-        "SELECT id FROM departments WHERE name = ?",
-        [classification.department]
+    if (!departmentId) {
+      // GCC does not publish a department for this type. Park it with the
+      // fallback department and flag it so an officer routes it, rather than
+      // guessing a department and mis-routing the complaint silently.
+      needsManualReview = true;
+      const [fallback] = await pool.query<RowDataPacket[]>(
+        "SELECT id FROM departments WHERE name = ? LIMIT 1",
+        [DEFAULT_FALLBACK_DEPARTMENT]
       );
-      departmentId = deptRows.length > 0 ? deptRows[0].id : departmentId;
-    } else if (data.departmentId) {
-      departmentId = data.departmentId;
+      departmentId = fallback.length > 0 ? (fallback[0].id as number) : null;
+      if (!departmentId) {
+        return NextResponse.json(
+          { error: "No department is configured to receive this complaint." },
+          { status: 500 }
+        );
+      }
     }
 
     const complaintCode = await generateUniqueComplaintCode();
 
-    const result = await withTransaction(async (conn) => {
+    const complaintId = await withTransaction(async (conn) => {
       const [insertResult] = await conn.query<ResultSetHeader>(
         `INSERT INTO complaints (
           complaint_code, user_id, initials, first_name, last_name, gender,
           street_address, pincode, mobile_number, phone_number, email,
-          zone_id, ward_number, locality_id, street_id, specific_location,
-          latitude, longitude, department_id, complaint_type_id, title,
-          description, media_path, is_anonymous, needs_manual_review, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Complaint Filed')`,
+          zone_id, ward_number, ward_source,
+          gcc_area_id, gcc_locality_id, gcc_street_id, manual_street_name, street_type,
+          location_pincode, specific_location, latitude, longitude,
+          department_id, complaint_subtype_id, title, description, media_path,
+          is_anonymous, needs_manual_review, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Complaint Filed')`,
         [
           complaintCode,
-          session?.userId ?? null,
+          session.userId,
           data.initials || null,
           data.firstName,
           data.lastName || null,
@@ -100,15 +169,20 @@ export async function POST(req: NextRequest) {
           data.mobileNumber || null,
           data.phoneNumber || null,
           data.email || null,
-          data.zoneId,
+          finalZoneId,
           data.wardNumber,
-          data.localityId,
-          data.streetId,
+          wardSource,
+          data.areaId,
+          data.gccLocalityId,
+          data.gccStreetId ?? null,
+          data.manualStreetName || null,
+          data.streetType || null,
+          data.locationPincode || null,
           data.specificLocation || null,
           data.latitude ?? null,
           data.longitude ?? null,
           departmentId,
-          data.complaintTypeId,
+          data.complaintSubtypeId,
           data.title,
           data.description,
           data.mediaPath || null,
@@ -117,15 +191,19 @@ export async function POST(req: NextRequest) {
         ]
       );
 
-      const complaintId = insertResult.insertId;
-
+      const newId = insertResult.insertId;
       await conn.query(
         `INSERT INTO complaint_status_history (complaint_id, status, stage, remarks, changed_by)
-         VALUES (?, 'Complaint Filed', 'Citizen', 'Complaint registered by citizen.', ?)`,
-        [complaintId, session?.userId ?? null]
+         VALUES (?, 'Complaint Filed', 'Citizen', ?, ?)`,
+        [
+          newId,
+          needsManualReview
+            ? "Complaint registered. Department routing pending officer review."
+            : "Complaint registered by citizen.",
+          session.userId
+        ]
       );
-
-      return complaintId;
+      return newId;
     });
 
     const [deptNameRows] = await pool.query<RowDataPacket[]>(
@@ -135,15 +213,23 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       message:
-        "Your complaint has been registered in the Public Grievance Redressal Portal of GCC. You can check the current status of your complaint using your Complaint Number.",
+        "Your complaint has been registered in the Public Grievance Redressal Portal of GCC. " +
+        "You can check the current status of your complaint using your Complaint Number.",
       complaintCode,
-      complaintId: result,
-      department: deptNameRows[0]?.name,
-      complaintType: complaintType.name
+      complaintId,
+      department: deptNameRows[0]?.name ?? null,
+      departmentPending: needsManualReview,
+      complaintType: subtype.label as string,
+      complaintCategory: subtype.category_name as string,
+      wardNumber: data.wardNumber,
+      wardSource
     });
   } catch (err) {
     console.error("[api/complaints POST]", err);
-    return NextResponse.json({ error: "Something went wrong while submitting your complaint. Please try again." }, { status: 500 });
+    return NextResponse.json(
+      { error: "Something went wrong while submitting your complaint. Please try again." },
+      { status: 500 }
+    );
   }
 }
 
@@ -157,16 +243,26 @@ export async function GET(req: NextRequest) {
   const code = searchParams.get("code")?.trim();
   const status = searchParams.get("status")?.trim();
 
+  // LEFT JOINs throughout: complaints filed before the GCC reference data was
+  // adopted carry complaint_type_id / locality_id instead, and must still list.
   let query = `
     SELECT c.id, c.complaint_code, c.title, c.status, c.rejected_stage, c.remarks,
-           c.created_at, c.zone_id, c.locality_id, c.is_anonymous,
-           d.name AS department_name, ct.name AS complaint_type_name,
-           z.zone_name, l.name AS locality_name
+           c.created_at, c.zone_id, c.ward_number, c.is_anonymous,
+           d.name AS department_name,
+           COALESCE(cs.label, ct.name) AS complaint_type_name,
+           cc.name AS complaint_category_name,
+           z.zone_name,
+           COALESCE(gl.name, l.name) AS locality_name,
+           ga.name AS area_name
     FROM complaints c
-    JOIN departments d ON d.id = c.department_id
-    JOIN complaint_types ct ON ct.id = c.complaint_type_id
-    JOIN zones z ON z.id = c.zone_id
-    JOIN localities l ON l.id = c.locality_id
+    LEFT JOIN departments d ON d.id = c.department_id
+    LEFT JOIN complaint_subtypes cs ON cs.id = c.complaint_subtype_id
+    LEFT JOIN complaint_categories cc ON cc.id = cs.category_id
+    LEFT JOIN complaint_types ct ON ct.id = c.complaint_type_id
+    LEFT JOIN zones z ON z.id = c.zone_id
+    LEFT JOIN gcc_localities gl ON gl.id = c.gcc_locality_id
+    LEFT JOIN gcc_areas ga ON ga.id = c.gcc_area_id
+    LEFT JOIN localities l ON l.id = c.locality_id
     WHERE c.user_id = ?`;
   const params: (string | number)[] = [session.userId];
 

@@ -4,10 +4,9 @@ import {
   ArrowRight,
   CheckCircle2,
   ClipboardList,
-  FilePlus2,
+  FileText,
   Loader,
-  Phone,
-  Search
+  Phone
 } from "lucide-react";
 import { getSessionFromCookies } from "@/lib/auth";
 import Header from "@/components/Header";
@@ -15,6 +14,7 @@ import Footer from "@/components/Footer";
 import StatusBadge from "@/components/StatusBadge";
 import { ComplaintStatus } from "@/types";
 import pool from "@/lib/db";
+import { CITIZEN_NAV } from "@/lib/constants";
 import { RowDataPacket } from "mysql2";
 
 export default async function CitizenLandingPage() {
@@ -61,11 +61,11 @@ export default async function CitizenLandingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
-      <Header userName={firstName || session.email} homeHref="/citizen" />
+      <Header userName={firstName || session.email} homeHref="/citizen" nav={CITIZEN_NAV} />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6 sm:py-10">
         {/* Hero */}
-        <section className="mesh-navy grain relative mb-6 overflow-hidden rounded-3xl p-8 text-white shadow-lift sm:p-10">
+        <section className="mesh-navy grain relative mb-6 overflow-hidden rounded-3xl px-8 py-9 text-white shadow-lift sm:px-10 sm:py-10">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 animate-drift rounded-full bg-white/10 blur-3xl"
@@ -79,26 +79,6 @@ export default async function CitizenLandingPage() {
               Report a civic issue in your neighbourhood, or follow the progress of a complaint
               you&apos;ve already filed. Most complaints are routed to a department within minutes.
             </p>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <Link
-                href="/citizen/file-complaint"
-                className="group inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-navy shadow-soft transition-all duration-200 ease-spring hover:-translate-y-0.5 hover:shadow-lift"
-              >
-                <FilePlus2 className="h-4 w-4" aria-hidden="true" />
-                File a Complaint
-                <ArrowRight
-                  className="h-4 w-4 transition-transform duration-200 ease-spring group-hover:translate-x-0.5"
-                  aria-hidden="true"
-                />
-              </Link>
-              <Link
-                href="/citizen/track-complaints"
-                className="inline-flex items-center gap-2 rounded-xl border border-white/25 bg-white/10 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-all duration-200 ease-spring hover:-translate-y-0.5 hover:bg-white/20"
-              >
-                <Search className="h-4 w-4" aria-hidden="true" />
-                Track Status
-              </Link>
-            </div>
           </div>
         </section>
 
@@ -115,48 +95,11 @@ export default async function CitizenLandingPage() {
           ))}
         </section>
 
-        {/* Actions */}
-        <section className="stagger mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Link href="/citizen/file-complaint" className="card-interactive group flex flex-col items-start gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-navy-50 text-navy transition-colors group-hover:bg-navy group-hover:text-white">
-              <FilePlus2 className="h-5 w-5" aria-hidden="true" />
-            </span>
-            <h2 className="text-lg font-bold text-ink">File a Complaint</h2>
-            <p className="text-sm leading-relaxed text-ink-muted">
-              Report a civic issue &mdash; garbage, street lights, potholes, drainage and more.
-            </p>
-            <span className="mt-1 inline-flex items-center gap-1.5 text-sm font-semibold text-navy">
-              Get started
-              <ArrowRight
-                className="h-4 w-4 transition-transform duration-200 ease-spring group-hover:translate-x-1"
-                aria-hidden="true"
-              />
-            </span>
-          </Link>
-
-          <Link href="/citizen/track-complaints" className="card-interactive group flex flex-col items-start gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-navy-50 text-navy transition-colors group-hover:bg-navy group-hover:text-white">
-              <Search className="h-5 w-5" aria-hidden="true" />
-            </span>
-            <h2 className="text-lg font-bold text-ink">Track Complaint Status</h2>
-            <p className="text-sm leading-relaxed text-ink-muted">
-              Follow each stage &mdash; from filing through department action to Collector verification.
-            </p>
-            <span className="mt-1 inline-flex items-center gap-1.5 text-sm font-semibold text-navy">
-              View status
-              <ArrowRight
-                className="h-4 w-4 transition-transform duration-200 ease-spring group-hover:translate-x-1"
-                aria-hidden="true"
-              />
-            </span>
-          </Link>
-        </section>
-
         {/* Recent activity */}
-        {recentRows.length > 0 && (
-          <section className="card-flat animate-fade-up">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-base font-bold text-ink">Recent Complaints</h2>
+        <section className="card-flat animate-fade-up">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-base font-bold text-ink">Recent Complaints</h2>
+            {recentRows.length > 0 && (
               <Link
                 href="/citizen/track-complaints"
                 className="inline-flex items-center gap-1 text-xs font-semibold text-navy hover:underline"
@@ -164,7 +107,25 @@ export default async function CitizenLandingPage() {
                 View all
                 <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
               </Link>
+            )}
+          </div>
+
+          {recentRows.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <span
+                aria-hidden="true"
+                className="flex h-11 w-11 items-center justify-center rounded-xl bg-navy-50 text-navy"
+              >
+                <FileText className="h-5 w-5" />
+              </span>
+              <p className="mt-1 text-sm font-semibold text-ink">No complaints yet</p>
+              <p className="max-w-sm text-sm leading-relaxed text-ink-muted">
+                When you report a civic issue, it will appear here with its current stage.
+                Use <span className="font-semibold text-ink">File a Complaint</span> in the
+                menu above to get started.
+              </p>
             </div>
+          ) : (
             <ul className="divide-y divide-canvas-border">
               {recentRows.map((c) => (
                 <li key={c.complaint_code as string} className="flex items-center justify-between gap-4 py-3">
@@ -184,8 +145,8 @@ export default async function CitizenLandingPage() {
                 </li>
               ))}
             </ul>
-          </section>
-        )}
+          )}
+        </section>
 
         {/* Helpline */}
         <section className="mt-6 flex items-center gap-3 rounded-2xl border border-gold-200 bg-gold-50 p-4">

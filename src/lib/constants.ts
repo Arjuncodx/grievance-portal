@@ -49,3 +49,12 @@ export const COMPLAINT_STATUSES = [
 ] as const;
 
 export const CHENNAI_CENTER = { lat: 13.0827, lng: 80.2707 };
+
+/**
+ * Primary destinations for a signed-in citizen. These live in the header
+ * because the citizen landing page no longer repeats them as body actions.
+ */
+export const CITIZEN_NAV = [
+  { href: "/citizen/file-complaint", label: "File a Complaint" },
+  { href: "/citizen/track-complaints", label: "Track Status" }
+];
