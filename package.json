@@ -14,7 +14,9 @@
     "seed:gcc": "node scripts/seed-gcc-reference.js",
     "db:setup": "node scripts/bootstrap-db.js && node scripts/migrate.js && node scripts/seed-gcc-reference.js",
     "bootstrap:db": "node scripts/bootstrap-db.js",
-    "derive:area-wards": "node scripts/derive-area-wards.js"
+    "derive:area-wards": "node scripts/derive-area-wards.js",
+    "export:data": "node scripts/export-complaints.js",
+    "export:excel": "node scripts/export-complaints.js && python scripts/export-to-xlsx.py"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
