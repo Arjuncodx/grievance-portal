@@ -108,8 +108,17 @@ const STEPS = [
 export default function FileComplaintPage() {
   const [me, setMe] = useState<any>(null);
   const [checkedSession, setCheckedSession] = useState(false);
-  /** Details the profile is missing that a complaint needs; asked once, then saved. */
-  const [missingDetails, setMissingDetails] = useState<string[]>([]);
+  /**
+   * Details the profile is missing that a complaint needs; asked once, then
+   * saved. Starts as "all missing" so that a profile which fails to load shows
+   * the input fields rather than an empty, un-fillable summary.
+   */
+  const [missingDetails, setMissingDetails] = useState<string[]>([
+    "firstName",
+    "gender",
+    "streetAddress",
+    "pincode"
+  ]);
   const [savingProfile, setSavingProfile] = useState(false);
 
   const [step, setStep] = useState(1);
