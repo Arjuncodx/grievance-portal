@@ -55,14 +55,6 @@ interface ZoneOption {
   zone_number: number;
   zone_name: string;
 }
-interface GccStreet {
-  id: number;
-  gcc_id: number;
-  name: string;
-  locality_id: number;
-  /** Shown as a second line, so no separate locality field is needed. */
-  locality_name: string;
-}
 interface WardOption {
   wardNumber: number;
   zoneId: number;
@@ -137,13 +129,11 @@ export default function FileComplaintPage() {
   // Step 2: location (verified GCC Area -> Locality -> Street)
   const [zones, setZones] = useState<ZoneOption[]>([]);
 
-  const [gccStreets, setGccStreets] = useState<GccStreet[]>([]);
 
-  const [loadingStreets, setLoadingStreets] = useState(false);
   const [zoneId, setZoneId] = useState("");
 
-  const [gccStreetId, setGccStreetId] = useState("");
-  const [manualStreetMode, setManualStreetMode] = useState(false);
+  // Street is always entered manually; the GCC street list is no longer used.
+  const manualStreetMode = true;
   const [manualStreetName, setManualStreetName] = useState("");
   const [streetType, setStreetType] = useState("");
   const [locationPincode, setLocationPincode] = useState("");
@@ -250,40 +240,6 @@ export default function FileComplaintPage() {
       })
       .finally(() => setTaxonomyLoading(false));
   }, []);
-
-  // Zone -> streets. Streets hang off GCC's PGR areas, which are grouped into
-  // zones by scripts/derive-area-zones.js; each option shows its locality so
-  // repeated street names can be told apart.
-  useEffect(() => {
-    setGccStreetId("");
-    setManualStreetMode(false);
-    if (!zoneId) {
-      setGccStreets([]);
-      return;
-    }
-    let stale = false;
-    setLoadingStreets(true);
-    fetch(`/api/locations/gcc-streets?zoneId=${zoneId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (stale) return;
-        const list: GccStreet[] = d.streets || [];
-        setGccStreets(list);
-        if (list.length === 0) setManualStreetMode(true);
-      })
-      .catch(() => {
-        if (!stale) {
-          setGccStreets([]);
-          setManualStreetMode(true);
-        }
-      })
-      .finally(() => {
-        if (!stale) setLoadingStreets(false);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [zoneId]);
 
 
 
@@ -461,11 +417,7 @@ export default function FileComplaintPage() {
 
   function validateLocation(): string | null {
     if (!zoneId) return "Please select the zone.";
-    if (manualStreetMode) {
-      if (!manualStreetName.trim()) return "Please enter the street name.";
-    } else if (!gccStreetId) {
-      return "Please select a street, or choose “Enter street manually”.";
-    }
+    if (!manualStreetName.trim()) return "Please enter the street name.";
     if (wardVerdict.status === "outside_boundary") {
       return wardVerdict.message;
     }
@@ -533,9 +485,9 @@ export default function FileComplaintPage() {
           phoneNumber: phoneNumber || null,
           email: personEmail || null,
           zoneId: Number(zoneId),
-          gccStreetId: manualStreetMode || !gccStreetId ? null : Number(gccStreetId),
-          manualStreetName: manualStreetMode ? manualStreetName.trim() : null,
-          streetType: manualStreetMode && streetType ? streetType : null,
+          gccStreetId: null,
+          manualStreetName: manualStreetName.trim(),
+          streetType: streetType || null,
           wardNumber: Number(wardNumber),
           wardSource: wardSource || "user_selected",
           locationPincode: locationPincode || null,
@@ -579,10 +531,8 @@ export default function FileComplaintPage() {
     setTitleEdited(false);
     setSpecificLocation("");
     setLocationPincode("");
-    setManualStreetMode(false);
     setManualStreetName("");
     setStreetType("");
-    setGccStreetId("");
     setAutofilled(new Set());
     setWardVerdict({ status: "idle" });
     setWardSource("");
@@ -973,79 +923,30 @@ export default function FileComplaintPage() {
                 )}
               </div>
 
-              {/* Street: pick from the area's streets, or type one that is missing.
-                  Each option shows its locality, which is why there is no
-                  separate locality field. */}
+              {/* Street is typed in. GCC's street list covers only part of the
+                  city and repeats names heavily, so a free text field is more
+                  reliable than picking from it. */}
               <div>
-                <div className="flex items-baseline justify-between">
-                  <label className="form-label" htmlFor={manualStreetMode ? "manualStreet" : "street"}>
-                    Street<span className="text-red-600">*</span>
-                  </label>
-                  <button
-                    type="button"
-                    disabled={!zoneId}
-                    onClick={() => {
-                      setManualStreetMode((v) => !v);
-                      setGccStreetId("");
-                      markEdited("manualStreetName");
-                    }}
-                    className="mb-1.5 inline-flex items-center gap-1 text-xs font-semibold text-navy transition hover:underline disabled:opacity-50"
-                  >
-                    <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
-                    {manualStreetMode ? "Choose from list" : "Enter street manually"}
-                  </button>
-                </div>
-
-                {manualStreetMode ? (
-                  <input
-                    id="manualStreet"
-                    className="form-input"
-                    placeholder="Street name (without the type)"
-                    value={manualStreetName}
-                    disabled={!zoneId}
-                    onChange={(e) => {
-                      markEdited("manualStreetName");
-                      setManualStreetName(e.target.value);
-                    }}
-                  />
-                ) : (
-                  <Combobox
-                    id="street"
-                    noun="street"
-                    options={gccStreets.map((st) => ({
-                      value: String(st.id),
-                      label: st.name,
-                      hint: st.locality_name
-                    }))}
-                    value={gccStreetId}
-                    onChange={setGccStreetId}
-                    disabled={!zoneId}
-                    loading={loadingStreets}
-                    disabledPlaceholder="Select a zone first"
-                    emptyAction={
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          setManualStreetMode(true);
-                          setGccStreetId("");
-                        }}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy hover:underline"
-                      >
-                        <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
-                        Enter this street manually instead
-                      </button>
-                    }
-                  />
-                )}
-                {!manualStreetMode && zoneId && gccStreets.length > 0 && (
-                  <p className="mt-1.5 text-xs text-ink-faint">
-                    {gccStreets.length.toLocaleString("en-IN")} streets in this zone. Not listed? Enter it manually.
-                  </p>
-                )}
+                <label className="form-label" htmlFor="manualStreet">
+                  Street<span className="text-red-600">*</span>
+                </label>
+                <input
+                  id="manualStreet"
+                  required
+                  maxLength={255}
+                  className="form-input"
+                  placeholder="e.g. Gandhi Nagar 2nd Cross"
+                  value={manualStreetName}
+                  onChange={(e) => {
+                    markEdited("manualStreetName");
+                    setManualStreetName(e.target.value);
+                  }}
+                />
+                <p className="form-hint">Street name only &mdash; pick the type separately.</p>
               </div>
 
-              {manualStreetMode && (
+              {true && (
+
                 <div>
                   <label className="form-label" htmlFor="streetType">Street type</label>
                   <select
