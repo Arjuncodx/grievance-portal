@@ -4,6 +4,7 @@ import { getSessionFromCookies, getActiveSession } from "@/lib/auth";
 import { complaintSubmitSchema } from "@/lib/validators";
 import { generateUniqueComplaintCode } from "@/lib/complaint-code";
 import { resolveWard } from "@/lib/wards";
+import { classifyComplaint } from "@/lib/ai-classifier";
 import { DEFAULT_FALLBACK_DEPARTMENT } from "@/lib/constants";
 import { RowDataPacket, ResultSetHeader } from "mysql2";
 
@@ -27,35 +28,43 @@ export async function POST(req: NextRequest) {
     // ---- Re-validate every location relationship server-side -------------
     // The client already enforces these, which is exactly why the server must
     // not trust them.
-    const [areaRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id FROM gcc_areas WHERE id = ? LIMIT 1",
-      [data.areaId]
+    const [zoneRows] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM zones WHERE id = ? LIMIT 1",
+      [data.zoneId]
     );
-    if (areaRows.length === 0) {
-      return NextResponse.json({ error: "Selected area is not recognised." }, { status: 400 });
+    if (zoneRows.length === 0) {
+      return NextResponse.json({ error: "Selected zone is not recognised." }, { status: 400 });
     }
 
-    // The locality is taken from the chosen street, not from the client: a
-    // street belongs to exactly one locality, so accepting a locality from the
-    // request would only create a way for the two to disagree.
+    // Area and locality both come from the chosen street rather than the
+    // client: a street belongs to exactly one locality, and that locality to
+    // one area, so accepting either from the request would only create a way
+    // for them to disagree.
     let localityId: number | null = null;
+    let areaId: number | null = null;
     if (data.gccStreetId) {
       const [streetRows] = await pool.query<RowDataPacket[]>(
-        `SELECT s.id, s.locality_id, l.area_id
-           FROM gcc_streets s JOIN gcc_localities l ON l.id = s.locality_id
+        `SELECT s.id, s.locality_id, l.area_id, a.zone_id
+           FROM gcc_streets s
+           JOIN gcc_localities l ON l.id = s.locality_id
+           JOIN gcc_areas a ON a.id = l.area_id
           WHERE s.id = ? LIMIT 1`,
         [data.gccStreetId]
       );
       if (streetRows.length === 0) {
         return NextResponse.json({ error: "Selected street is not recognised." }, { status: 400 });
       }
-      if (streetRows[0].area_id !== data.areaId) {
+      // A street whose area has no zone on record is accepted: the gap is in
+      // our own area-to-zone derivation, not in the citizen's choice.
+      const streetZone = streetRows[0].zone_id as number | null;
+      if (streetZone !== null && streetZone !== data.zoneId) {
         return NextResponse.json(
-          { error: "The selected street does not belong to the selected area." },
+          { error: "The selected street is not in the selected zone." },
           { status: 400 }
         );
       }
       localityId = streetRows[0].locality_id as number;
+      areaId = streetRows[0].area_id as number;
     }
 
     // Ward must be a real GCC ward; its zone comes from the ward, not the client.
@@ -125,18 +134,32 @@ export async function POST(req: NextRequest) {
     const subtype = subRows[0];
 
     let departmentId = subtype.department_id as number | null;
-    let needsManualReview = false;
+    let needsManualReview = subtype.mapping_status === "assumed";
 
     if (!departmentId) {
-      // GCC does not publish a department for this type. Park it with the
-      // fallback department and flag it so an officer routes it, rather than
-      // guessing a department and mis-routing the complaint silently.
+      // No fixed department for this type ("Other"). Route it from what the
+      // citizen wrote, using OpenAI when configured and a keyword classifier
+      // otherwise; either way a department is always chosen, and an officer
+      // confirms it.
+      const text = [data.otherDescription, data.title, data.description]
+        .filter(Boolean)
+        .join(". ");
+      const classification = await classifyComplaint(text);
       needsManualReview = true;
-      const [fallback] = await pool.query<RowDataPacket[]>(
+
+      const [deptRows] = await pool.query<RowDataPacket[]>(
         "SELECT id FROM departments WHERE name = ? LIMIT 1",
-        [DEFAULT_FALLBACK_DEPARTMENT]
+        [classification.department]
       );
-      departmentId = fallback.length > 0 ? (fallback[0].id as number) : null;
+      departmentId = deptRows.length > 0 ? (deptRows[0].id as number) : null;
+
+      if (!departmentId) {
+        const [fallback] = await pool.query<RowDataPacket[]>(
+          "SELECT id FROM departments WHERE name = ? LIMIT 1",
+          [DEFAULT_FALLBACK_DEPARTMENT]
+        );
+        departmentId = fallback.length > 0 ? (fallback[0].id as number) : null;
+      }
       if (!departmentId) {
         return NextResponse.json(
           { error: "No department is configured to receive this complaint." },
@@ -173,7 +196,7 @@ export async function POST(req: NextRequest) {
           finalZoneId,
           data.wardNumber,
           wardSource,
-          data.areaId,
+          areaId,
           localityId,
           data.gccStreetId ?? null,
           data.manualStreetName || null,

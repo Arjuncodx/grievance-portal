@@ -112,6 +112,7 @@ export const profileUpdateSchema = z.object({
   gender: z.enum(["Male", "Female", "Transgender"]).optional().nullable(),
   dateOfBirth: z.string().optional().nullable(),
   alternateEmail: z.union([emailSchema, z.literal("")]).optional().nullable(),
+  mobileNumber: z.union([mobileSchema, z.literal("")]).optional().nullable(),
   doorNoAndStreet: z.string().trim().max(255).optional().nullable(),
   area: z.string().trim().max(150).optional().nullable(),
   locality: z.string().trim().max(150).optional().nullable(),
@@ -142,14 +143,15 @@ export const complaintSubmitSchema = z
     firstName: z.string().trim().min(1, "First name is required").max(100),
     lastName: z.string().trim().max(100).optional().default(""),
     gender: z.enum(["Male", "Female", "Transgender"]),
-    streetAddress: z.string().trim().min(1, "Street address is required").max(255),
-    pincode: pincodeSchema,
-    mobileNumber: z.union([mobileSchema, z.literal("")]).optional().nullable(),
+    streetAddress: z.string().trim().min(1, "Your address is required").max(255),
+    // Mandatory: the department needs a way to reach the complainant.
+    mobileNumber: mobileSchema,
+    pincode: z.union([pincodeSchema, z.literal("")]).optional().nullable(),
     phoneNumber: z.string().trim().max(15).optional().nullable(),
     email: z.union([emailSchema, z.literal("")]).optional().nullable(),
 
     // --- where the problem is (verified GCC reference data) -------------
-    areaId: z.number().int().positive("Please select the area"),
+    zoneId: z.number().int().positive("Please select the zone"),
     // Derived server-side from the chosen street rather than picked: every
     // street already belongs to exactly one locality. Null for a manually
     // typed street, whose locality is genuinely unknown.
@@ -160,7 +162,6 @@ export const complaintSubmitSchema = z
 
     wardNumber: z.number().int().min(1).max(200),
     wardSource: z.enum(["map_boundary", "user_selected"]).optional().default("user_selected"),
-    zoneId: z.number().int().positive().nullable().optional(),
     locationPincode: z.union([pincodeSchema, z.literal("")]).nullable().optional(),
 
     specificLocation: z.string().trim().max(500).optional().nullable(),
@@ -168,7 +169,9 @@ export const complaintSubmitSchema = z
     longitude: z.number().min(-180).max(180).optional().nullable(),
 
     // --- what the problem is -------------------------------------------
-    complaintSubtypeId: z.number().int().positive("Please select a complaint type"),
+    complaintSubtypeId: z.number().int().positive("Please select a complaint sub type"),
+    // Free text for the "Other" type; the classifier routes it to a department.
+    otherDescription: z.string().trim().max(400).nullable().optional(),
 
     title: z.string().trim().min(1, "Title is required").max(200),
     description: z.string().trim().min(1, "Details are required").max(400),

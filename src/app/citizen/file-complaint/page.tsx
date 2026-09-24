@@ -50,10 +50,10 @@ interface Street {
   locality_id: number;
   name: string;
 }
-interface GccArea {
+interface ZoneOption {
   id: number;
-  gcc_id: number;
-  name: string;
+  zone_number: number;
+  zone_name: string;
 }
 interface GccStreet {
   id: number;
@@ -117,7 +117,7 @@ export default function FileComplaintPage() {
     "firstName",
     "gender",
     "streetAddress",
-    "pincode"
+    "mobileNumber"
   ]);
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -135,12 +135,12 @@ export default function FileComplaintPage() {
   const [personEmail, setPersonEmail] = useState("");
 
   // Step 2: location (verified GCC Area -> Locality -> Street)
-  const [areas, setAreas] = useState<GccArea[]>([]);
+  const [zones, setZones] = useState<ZoneOption[]>([]);
 
   const [gccStreets, setGccStreets] = useState<GccStreet[]>([]);
 
   const [loadingStreets, setLoadingStreets] = useState(false);
-  const [areaId, setAreaId] = useState("");
+  const [zoneId, setZoneId] = useState("");
 
   const [gccStreetId, setGccStreetId] = useState("");
   const [manualStreetMode, setManualStreetMode] = useState(false);
@@ -175,7 +175,9 @@ export default function FileComplaintPage() {
   const [categories, setCategories] = useState<ComplaintCategory[]>([]);
   const [taxonomySource, setTaxonomySource] = useState<TaxonomySource | null>(null);
   const [taxonomyLoading, setTaxonomyLoading] = useState(true);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [selectedSubtype, setSelectedSubtype] = useState<Subcomplaint | null>(null);
+  const [otherDescription, setOtherDescription] = useState("");
   /** Set once the citizen edits the title, so retyping the type stops overwriting it. */
   const [titleEdited, setTitleEdited] = useState(false);
 
@@ -217,10 +219,10 @@ export default function FileComplaintPage() {
             if (!profile.firstName) missing.push("firstName");
             if (!profile.gender) missing.push("gender");
             if (!profile.doorNoAndStreet) missing.push("streetAddress");
-            if (!profile.pincode) missing.push("pincode");
+            if (!profile.mobileNumber) missing.push("mobileNumber");
             setMissingDetails(missing);
           } else {
-            setMissingDetails(["firstName", "gender", "streetAddress", "pincode"]);
+            setMissingDetails(["firstName", "gender", "streetAddress", "mobileNumber"]);
             // Deliberately NOT prefilling the complaint's area/ward/street from
             // the profile: those describe where the citizen lives, and the
             // complaint location is a separate fact they must state for the
@@ -232,10 +234,10 @@ export default function FileComplaintPage() {
     }
     init();
 
-    fetch("/api/locations/areas")
+    fetch("/api/locations/zones")
       .then((r) => r.json())
-      .then((d) => setAreas(d.areas || []))
-      .catch(() => setAreas([]));
+      .then((d) => setZones(d.zones || []))
+      .catch(() => setZones([]));
 
     fetch("/api/complaint-taxonomy")
       .then((r) => r.json())
@@ -249,18 +251,19 @@ export default function FileComplaintPage() {
       .finally(() => setTaxonomyLoading(false));
   }, []);
 
-  // Area -> streets. Every street carries its locality, so a separate
-  // locality step would only ask for something the street already states.
+  // Zone -> streets. Streets hang off GCC's PGR areas, which are grouped into
+  // zones by scripts/derive-area-zones.js; each option shows its locality so
+  // repeated street names can be told apart.
   useEffect(() => {
     setGccStreetId("");
     setManualStreetMode(false);
-    if (!areaId) {
+    if (!zoneId) {
       setGccStreets([]);
       return;
     }
     let stale = false;
     setLoadingStreets(true);
-    fetch(`/api/locations/gcc-streets?areaId=${areaId}`)
+    fetch(`/api/locations/gcc-streets?zoneId=${zoneId}`)
       .then((r) => r.json())
       .then((d) => {
         if (stale) return;
@@ -280,17 +283,18 @@ export default function FileComplaintPage() {
     return () => {
       stale = true;
     };
-  }, [areaId]);
+  }, [zoneId]);
+
 
 
   /**
-   * Ward options for the selected area. The API says whether it actually
-   * narrowed the list and how trustworthy that narrowing is; the notice it
-   * returns is shown verbatim rather than implying the wards are authoritative.
+   * Wards of the selected zone. zone_wards is an exact mapping derived from the
+   * ward polygons themselves, so unlike the old area-based filter this list is
+   * not an estimate.
    */
   useEffect(() => {
     let stale = false;
-    fetch(`/api/locations/wards${areaId ? "?areaId=" + areaId : ""}`)
+    fetch(`/api/locations/wards${zoneId ? "?zoneId=" + zoneId : ""}`)
       .then((r) => r.json())
       .then((d) => {
         if (stale) return;
@@ -306,7 +310,8 @@ export default function FileComplaintPage() {
     return () => {
       stale = true;
     };
-  }, [areaId]);
+  }, [zoneId]);
+
 
 
   /** Marks a field as citizen-edited so map autofill leaves it alone. */
@@ -334,19 +339,6 @@ export default function FileComplaintPage() {
         const filled = new Set<string>();
         const { street, pincode } = sel.address;
 
-        // Match the geocoded area/locality text against the GCC area list.
-        // Only an exact normalised match is accepted — a near-miss would put
-        // the complaint in the wrong area.
-        const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, "");
-        for (const candidate of [sel.address.area, sel.address.locality]) {
-          if (!candidate) continue;
-          const hit = areas.find((a) => norm(a.name) === norm(candidate));
-          if (hit) {
-            setAreaId(String(hit.id));
-            filled.add("area");
-            break;
-          }
-        }
         if (street) filled.add("street");
         if (pincode && /^\d{6}$/.test(pincode)) filled.add("pincode");
         setAutofilled(filled);
@@ -374,6 +366,11 @@ export default function FileComplaintPage() {
         .then((d) => {
           if (seq !== wardSeq.current) return;
           if (d.status === "resolved") {
+            // The pin gives the zone exactly, via the ward polygon it fell in.
+            if (d.zoneId) {
+              setZoneId(String(d.zoneId));
+              setAutofilled((prev) => new Set([...prev, "zone"]));
+            }
             setWardVerdict({
               status: "resolved",
               wardNumber: d.wardNumber,
@@ -409,7 +406,7 @@ export default function FileComplaintPage() {
           });
         });
     },
-    [areas]
+    []
   );
 
   /**
@@ -428,7 +425,8 @@ export default function FileComplaintPage() {
           lastName,
           gender: gender || null,
           doorNoAndStreet: streetAddress || null,
-          pincode: pincode || null
+          pincode: pincode || null,
+          mobileNumber: mobileNumber || null
         })
       });
       if (res.ok) setMissingDetails([]);
@@ -451,16 +449,18 @@ export default function FileComplaintPage() {
   function validateDetails(): string | null {
     if (!firstName.trim()) return "First name is required.";
     if (!gender) return "Please select a gender.";
-    if (!streetAddress.trim()) return "Street address is required.";
-    if (!/^\d{6}$/.test(pincode)) return "Enter a valid 6-digit pincode.";
-    if (mobileNumber && !/^[6-9]\d{9}$/.test(mobileNumber)) {
-      return "Enter a valid 10-digit mobile number, or leave it blank.";
+    if (!streetAddress.trim()) return "Your address is required.";
+    if (!/^[6-9]\d{9}$/.test(mobileNumber)) {
+      return "Enter a valid 10-digit mobile number.";
+    }
+    if (pincode && !/^\d{6}$/.test(pincode)) {
+      return "Enter a valid 6-digit PIN code, or leave it blank.";
     }
     return null;
   }
 
   function validateLocation(): string | null {
-    if (!areaId) return "Please select the area.";
+    if (!zoneId) return "Please select the zone.";
     if (manualStreetMode) {
       if (!manualStreetName.trim()) return "Please enter the street name.";
     } else if (!gccStreetId) {
@@ -481,7 +481,12 @@ export default function FileComplaintPage() {
   }
 
   function validateType(): string | null {
-    if (!selectedSubtype) return "Please select a complaint type.";
+    if (!selectedCategoryId) return "Please select a complaint type.";
+    if (!selectedSubtype) return "Please select a complaint sub type.";
+    const cat = categories.find((c) => c.id === selectedCategoryId);
+    if (cat && cat.name.trim().toLowerCase() === "other" && !otherDescription.trim()) {
+      return "Please describe the complaint so it can be routed to a department.";
+    }
     return null;
   }
 
@@ -527,19 +532,19 @@ export default function FileComplaintPage() {
           mobileNumber: mobileNumber || null,
           phoneNumber: phoneNumber || null,
           email: personEmail || null,
-          areaId: Number(areaId),
+          zoneId: Number(zoneId),
           gccStreetId: manualStreetMode || !gccStreetId ? null : Number(gccStreetId),
           manualStreetName: manualStreetMode ? manualStreetName.trim() : null,
           streetType: manualStreetMode && streetType ? streetType : null,
           wardNumber: Number(wardNumber),
           wardSource: wardSource || "user_selected",
-          zoneId: selectedWard ? selectedWard.zoneId : null,
           locationPincode: locationPincode || null,
           specificLocation,
           // The pin the citizen placed, never a geocoder's approximation.
           latitude: coords?.lat ?? null,
           longitude: coords?.lng ?? null,
           complaintSubtypeId: selectedSubtype ? selectedSubtype.id : null,
+          otherDescription: otherDescription || null,
           title,
           description,
           mediaPath,
@@ -569,6 +574,8 @@ export default function FileComplaintPage() {
     setMediaFile(null);
     setIsAnonymous(false);
     setSelectedSubtype(null);
+    setSelectedCategoryId(null);
+    setOtherDescription("");
     setTitleEdited(false);
     setSpecificLocation("");
     setLocationPincode("");
@@ -685,7 +692,7 @@ export default function FileComplaintPage() {
                 <p className="mt-0.5 text-sm text-ink-muted">
                   {missingDetails.length === 0
                     ? "Taken from your profile — you only enter these once."
-                    : "We need a few details for the record. They are saved to your profile, so you will not be asked again."}
+                    : "Fields marked * are required. They are saved to your profile, so you will not be asked again."}
                 </p>
               </div>
             </div>
@@ -704,13 +711,7 @@ export default function FileComplaintPage() {
               </div>
               <div>
                 <dt className="text-2xs font-semibold uppercase tracking-wide text-ink-subtle">Mobile</dt>
-                <dd className="mt-0.5 truncate text-sm text-ink">
-                  {mobileNumber || (
-                    <Link href="/profile" className="font-semibold text-navy hover:underline">
-                      Add in profile
-                    </Link>
-                  )}
-                </dd>
+                <dd className="mt-0.5 truncate text-sm text-ink">{mobileNumber || "\u2014"}</dd>
               </div>
               {!missingDetails.includes("gender") && (
                 <div>
@@ -749,7 +750,7 @@ export default function FileComplaintPage() {
                 {missingDetails.includes("firstName") && (
                   <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
-                      <label className="form-label" htmlFor="fname">First name</label>
+                      <label className="form-label" htmlFor="fname">First name <span className="text-red-600">*</span></label>
                       <input id="fname" required className="form-input" value={firstName}
                         onChange={(e) => setFirstName(e.target.value)} />
                     </div>
@@ -765,7 +766,7 @@ export default function FileComplaintPage() {
 
                 {missingDetails.includes("gender") && (
                   <div className="mb-5">
-                    <span className="form-label">Gender</span>
+                    <span className="form-label">Gender <span className="text-red-600">*</span></span>
                     <div className="flex flex-wrap gap-2">
                       {["Male", "Female", "Transgender"].map((g) => (
                         <button
@@ -786,18 +787,31 @@ export default function FileComplaintPage() {
                 {missingDetails.includes("streetAddress") && (
                   <div className="mb-5">
                     <label className="form-label" htmlFor="streetAddr">
-                      Your address <span className="normal-case text-ink-faint">(where you live, not the problem location)</span>
+                      Your address <span className="text-red-600">*</span> <span className="normal-case text-ink-faint">(where you live, not the problem location)</span>
                     </label>
                     <input id="streetAddr" required className="form-input" value={streetAddress}
                       onChange={(e) => setStreetAddress(e.target.value)} />
                   </div>
                 )}
 
-                {missingDetails.includes("pincode") && (
-                  <div className="mb-5 sm:max-w-[50%]">
-                    <label className="form-label" htmlFor="cpincode">Your PIN code</label>
-                    <input id="cpincode" inputMode="numeric" maxLength={6} required className="form-input"
-                      value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))} />
+                {missingDetails.includes("mobileNumber") && (
+                  <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="form-label" htmlFor="cmobile">
+                        Mobile number<span className="text-red-600">*</span>
+                      </label>
+                      <input id="cmobile" inputMode="numeric" maxLength={10} required className="form-input"
+                        value={mobileNumber}
+                        onChange={(e) => setMobileNumber(e.target.value.replace(/\D/g, ""))} />
+                      <p className="form-hint">10 digits, so the department can reach you.</p>
+                    </div>
+                    <div>
+                      <label className="form-label" htmlFor="cpincode">
+                        Your PIN code <span className="normal-case text-ink-faint">(optional)</span>
+                      </label>
+                      <input id="cpincode" inputMode="numeric" maxLength={6} className="form-input"
+                        value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))} />
+                    </div>
                   </div>
                 )}
               </div>
@@ -936,16 +950,27 @@ export default function FileComplaintPage() {
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label className="form-label" htmlFor="area">Area</label>
+                <label className="form-label" htmlFor="zone">
+                  Zone<span className="text-red-600">*</span>
+                </label>
                 <Combobox
-                  id="area"
+                  id="zone"
                   required
-                  noun="area"
-                  options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
-                  value={areaId}
-                  onChange={setAreaId}
-                  loading={areas.length === 0}
+                  noun="zone"
+                  options={zones.map((z) => ({
+                    value: String(z.id),
+                    label: `Zone ${z.zone_number} \u2014 ${z.zone_name}`
+                  }))}
+                  value={zoneId}
+                  onChange={setZoneId}
+                  loading={zones.length === 0}
                 />
+                {autofilled.has("zone") && (
+                  <p className="mt-1.5 inline-flex items-start gap-1.5 text-xs text-emerald-700">
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                    Set from the map pin.
+                  </p>
+                )}
               </div>
 
               {/* Street: pick from the area's streets, or type one that is missing.
@@ -954,11 +979,11 @@ export default function FileComplaintPage() {
               <div>
                 <div className="flex items-baseline justify-between">
                   <label className="form-label" htmlFor={manualStreetMode ? "manualStreet" : "street"}>
-                    Street
+                    Street<span className="text-red-600">*</span>
                   </label>
                   <button
                     type="button"
-                    disabled={!areaId}
+                    disabled={!zoneId}
                     onClick={() => {
                       setManualStreetMode((v) => !v);
                       setGccStreetId("");
@@ -977,7 +1002,7 @@ export default function FileComplaintPage() {
                     className="form-input"
                     placeholder="Street name (without the type)"
                     value={manualStreetName}
-                    disabled={!areaId}
+                    disabled={!zoneId}
                     onChange={(e) => {
                       markEdited("manualStreetName");
                       setManualStreetName(e.target.value);
@@ -994,9 +1019,9 @@ export default function FileComplaintPage() {
                     }))}
                     value={gccStreetId}
                     onChange={setGccStreetId}
-                    disabled={!areaId}
+                    disabled={!zoneId}
                     loading={loadingStreets}
-                    disabledPlaceholder="Select an area first"
+                    disabledPlaceholder="Select a zone first"
                     emptyAction={
                       <button
                         type="button"
@@ -1013,9 +1038,9 @@ export default function FileComplaintPage() {
                     }
                   />
                 )}
-                {!manualStreetMode && areaId && gccStreets.length > 0 && (
+                {!manualStreetMode && zoneId && gccStreets.length > 0 && (
                   <p className="mt-1.5 text-xs text-ink-faint">
-                    {gccStreets.length.toLocaleString("en-IN")} streets in this area.
+                    {gccStreets.length.toLocaleString("en-IN")} streets in this zone. Not listed? Enter it manually.
                   </p>
                 )}
               </div>
@@ -1038,15 +1063,19 @@ export default function FileComplaintPage() {
               )}
 
               <div>
-                <label className="form-label" htmlFor="ward">Ward</label>
+                <label className="form-label" htmlFor="ward">
+                  Ward<span className="text-red-600">*</span>
+                </label>
                 <Combobox
                   id="ward"
                   required
                   noun="ward"
                   options={wards.map((w) => ({
                     value: String(w.wardNumber),
-                    label: w.label,
-                    hint: w.isPrimary ? `${w.zoneName} · most likely` : w.zoneName
+                    // Number and zone together, so the ward is identifiable
+                    // without knowing the numbering by heart.
+                    label: `Ward ${w.wardNumber} — ${w.zoneName}`,
+                    hint: `Zone ${w.zoneNumber}`
                   }))}
                   value={wardNumber}
                   onChange={(v) => {
@@ -1072,7 +1101,7 @@ export default function FileComplaintPage() {
 
               <div>
                 <label className="form-label" htmlFor="locationPincode">
-                  PIN code <span className="normal-case text-ink-faint">(optional)</span>
+                  PIN code of this location <span className="normal-case text-ink-faint">(optional)</span>
                 </label>
                 <input
                   id="locationPincode"
@@ -1148,6 +1177,10 @@ export default function FileComplaintPage() {
 
             <ComplaintTypeSelector
               categories={categories}
+              selectedCategoryId={selectedCategoryId}
+              onSelectCategory={setSelectedCategoryId}
+              otherDescription={otherDescription}
+              onOtherDescriptionChange={setOtherDescription}
               selectedId={selectedSubtype ? selectedSubtype.id : null}
               loading={taxonomyLoading}
               source={taxonomySource}

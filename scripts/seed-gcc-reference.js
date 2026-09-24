@@ -26,8 +26,17 @@ const { getDbConfig, describeDb } = require("./db-config");
 const REF_DIR = path.join(__dirname, "..", "data", "gcc-reference");
 const BND_DIR = path.join(__dirname, "..", "data", "boundaries");
 
-// Only unambiguous matches. Add to this map after verifying a routing with GCC.
+// Every GCC category is routed to a department. Eight of these are
+// unambiguous from the category name; the rest (marked below) are this
+// application's own best-fit assignment, because GCC does not publish its
+// internal routing on the citizen page. Complaints of an assigned-not-
+// published type are still flagged for an officer to confirm.
+//
+// "Other" is deliberately absent: it has no fixed department, and the
+// classifier in src/lib/ai-classifier.ts routes it from the citizen's own
+// description at submit time.
 const CATEGORY_DEPARTMENT = {
+  // Unambiguous
   "Street Light": "Electrical Department",
   "Garbage": "Solid Waste Management Department",
   "Water Stagnation": "Storm Water Drain Department",
@@ -35,8 +44,29 @@ const CATEGORY_DEPARTMENT = {
   "Public Health": "Health Department",
   "Park and Playground": "Parks & Play Fields Department",
   "Building Plan Permission": "Engineering Department (Town Planning & Building Permissions)",
-  "Tax and Licence": "Revenue Department"
+  "Tax and Licence": "Revenue Department",
+
+  // Best-fit assignment, not published by GCC
+  "Public Toilet": "Health Department",
+  "Road and Footpath": "Engineering Department (Town Planning & Building Permissions)",
+  "Air Quality": "Health Department",
+  "Flood": "Storm Water Drain Department",
+  "Voter ID": "General Administration",
+  "General": "General Administration",
+  "MEGA STREETS - PLANNING PHASE": "Engineering Department (Town Planning & Building Permissions)",
+  "MEGA STREETS - OPERATION PHASE": "Engineering Department (Town Planning & Building Permissions)",
+  "MEGA STREETS - CONSTRUCTION PHASE": "Engineering Department (Town Planning & Building Permissions)"
 };
+
+// Categories whose department this app assigned rather than read from GCC.
+// Stored as mapping_status='assumed' so an officer knows to confirm routing.
+const ASSUMED_CATEGORIES = new Set([
+  "Public Toilet", "Road and Footpath", "Air Quality", "Flood",
+  "Voter ID", "General",
+  "MEGA STREETS - PLANNING PHASE",
+  "MEGA STREETS - OPERATION PHASE",
+  "MEGA STREETS - CONSTRUCTION PHASE"
+]);
 
 function readJson(file) {
   if (!fs.existsSync(file)) return null;
@@ -124,7 +154,7 @@ async function main() {
         s.gccId,
         s.label,
         deptId || null,
-        deptId ? "mapped" : "unmapped",
+        deptId ? (ASSUMED_CATEGORIES.has(cat.category) ? "assumed" : "mapped") : "unmapped",
         frequentById.has(s.gccId) ? 1 : 0,
         frequentById.has(s.gccId) ? frequentById.get(s.gccId) : null,
         i

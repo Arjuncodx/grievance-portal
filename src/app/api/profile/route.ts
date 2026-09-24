@@ -139,15 +139,17 @@ export async function PUT(req: NextRequest) {
     locality: data.locality || null,
     pincode: data.pincode || null,
     zone_id: data.zoneId || null,
-    ward_number: data.wardNumber || null
+    ward_number: data.wardNumber || null,
+    mobile_number: data.mobileNumber || null
   };
 
   if (existing.length === 0) {
     await pool.query(
       `INSERT INTO user_profiles
         (user_id, first_name, last_name, gender, date_of_birth, alternate_email,
-         door_no_and_street, area, locality, pincode, zone_id, ward_number)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         door_no_and_street, area, locality, pincode, zone_id, ward_number,
+         mobile_number)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         session.userId,
         fields.first_name,
@@ -160,14 +162,16 @@ export async function PUT(req: NextRequest) {
         fields.locality,
         fields.pincode,
         fields.zone_id,
-        fields.ward_number
+        fields.ward_number,
+        fields.mobile_number
       ]
     );
   } else {
     await pool.query(
       `UPDATE user_profiles SET
         first_name = ?, last_name = ?, gender = ?, date_of_birth = ?, alternate_email = ?,
-        door_no_and_street = ?, area = ?, locality = ?, pincode = ?, zone_id = ?, ward_number = ?
+        door_no_and_street = ?, area = ?, locality = ?, pincode = ?, zone_id = ?, ward_number = ?,
+        mobile_number = COALESCE(?, mobile_number)
        WHERE user_id = ?`,
       [
         fields.first_name,
@@ -181,6 +185,7 @@ export async function PUT(req: NextRequest) {
         fields.pincode,
         fields.zone_id,
         fields.ward_number,
+        fields.mobile_number,
         session.userId
       ]
     );
