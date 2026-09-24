@@ -58,6 +58,13 @@ export const registerSchema = z
     email: emailSchema,
     password: passwordSchema,
     confirmPassword: z.string(),
+    // Captured once here so the complaint form never has to ask again.
+    firstName: z
+      .string({ required_error: "First name is required" })
+      .trim()
+      .min(1, "First name is required")
+      .max(100),
+    lastName: z.string().trim().max(100).optional().default(""),
     role: z.enum(["collector", "department_officer", "citizen"]),
     departmentId: z.number().int().positive().nullable().optional()
   })

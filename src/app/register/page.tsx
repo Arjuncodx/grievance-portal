@@ -40,6 +40,8 @@ const ROLE_OPTIONS = [
 export default function RegisterPage() {
   const router = useRouter();
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -70,6 +72,10 @@ export default function RegisterPage() {
       setError("Please select a department.");
       return;
     }
+    if (!firstName.trim()) {
+      setError("Please enter your first name.");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
       return;
@@ -84,6 +90,8 @@ export default function RegisterPage() {
           email,
           password,
           confirmPassword,
+          firstName,
+          lastName,
           role,
           departmentId: role === "department_officer" ? Number(departmentId) : null
         })
@@ -196,6 +204,43 @@ export default function RegisterPage() {
                   </select>
                 </div>
               )}
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="group">
+                  <label htmlFor="firstName" className="form-label">
+                    First name
+                  </label>
+                  <div className="relative">
+                    <span className="input-affix group-focus-within:text-navy-500">
+                      <User className="h-[18px] w-[18px]" aria-hidden="true" />
+                    </span>
+                    <input
+                      id="firstName"
+                      type="text"
+                      required
+                      autoComplete="given-name"
+                      className="form-input pl-10"
+                      placeholder="Arjun"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="group">
+                  <label htmlFor="lastName" className="form-label">
+                    Last name <span className="normal-case text-ink-faint">(optional)</span>
+                  </label>
+                  <input
+                    id="lastName"
+                    type="text"
+                    autoComplete="family-name"
+                    className="form-input"
+                    placeholder="Kumar"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                </div>
+              </div>
 
               <div className="group">
                 <label htmlFor="email" className="form-label">

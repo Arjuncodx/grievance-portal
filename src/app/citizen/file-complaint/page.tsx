@@ -108,6 +108,9 @@ const STEPS = [
 export default function FileComplaintPage() {
   const [me, setMe] = useState<any>(null);
   const [checkedSession, setCheckedSession] = useState(false);
+  /** Details the profile is missing that a complaint needs; asked once, then saved. */
+  const [missingDetails, setMissingDetails] = useState<string[]>([]);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const [step, setStep] = useState(1);
 
@@ -198,6 +201,17 @@ export default function FileComplaintPage() {
             setPincode(profile.pincode || "");
             setStreetAddress(profile.doorNoAndStreet || "");
             setMobileNumber(profile.mobileNumber || "");
+
+            // A complaint needs these four. Anything already on the profile is
+            // never asked for again.
+            const missing: string[] = [];
+            if (!profile.firstName) missing.push("firstName");
+            if (!profile.gender) missing.push("gender");
+            if (!profile.doorNoAndStreet) missing.push("streetAddress");
+            if (!profile.pincode) missing.push("pincode");
+            setMissingDetails(missing);
+          } else {
+            setMissingDetails(["firstName", "gender", "streetAddress", "pincode"]);
             // Deliberately NOT prefilling the complaint's area/ward/street from
             // the profile: those describe where the citizen lives, and the
             // complaint location is a separate fact they must state for the
@@ -388,6 +402,36 @@ export default function FileComplaintPage() {
     },
     [areas]
   );
+
+  /**
+   * Persists details the citizen had to supply here, so the next complaint
+   * prefills them instead of asking again.
+   */
+  async function saveDetailsToProfile(): Promise<boolean> {
+    if (missingDetails.length === 0) return true;
+    setSavingProfile(true);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          gender: gender || null,
+          doorNoAndStreet: streetAddress || null,
+          pincode: pincode || null
+        })
+      });
+      if (res.ok) setMissingDetails([]);
+      // A failed save is not worth blocking the complaint over — the details
+      // are still submitted with it, they just were not remembered.
+      return true;
+    } catch {
+      return true;
+    } finally {
+      setSavingProfile(false);
+    }
+  }
 
   function goToStep(n: number) {
     setSubmitError(null);
@@ -620,7 +664,7 @@ export default function FileComplaintPage() {
           </ol>
         )}
 
-        {/* STEP 1: PERSONAL DETAILS */}
+        {/* STEP 1: WHO IS REPORTING */}
         {step === 1 && (
           <div className="card animate-fade-up">
             <div className="mb-6 flex items-start gap-3">
@@ -630,72 +674,125 @@ export default function FileComplaintPage() {
               <div>
                 <h2 className="text-lg font-bold text-ink">Your Details</h2>
                 <p className="mt-0.5 text-sm text-ink-muted">
-                  Prefilled from your profile &mdash; edit anything out of date.
+                  {missingDetails.length === 0
+                    ? "Taken from your profile — you only enter these once."
+                    : "We need a few details for the record. They are saved to your profile, so you will not be asked again."}
                 </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div>
-                <label className="form-label" htmlFor="initials">Initials</label>
-                <input id="initials" className="form-input" value={initials} onChange={(e) => setInitials(e.target.value)} />
+            {/* Everything already known: shown, not re-asked */}
+            <dl className="grid grid-cols-2 gap-x-5 gap-y-4 rounded-2xl border border-canvas-border bg-canvas p-4 sm:grid-cols-3">
+              <div className="col-span-2 sm:col-span-1">
+                <dt className="text-2xs font-semibold uppercase tracking-wide text-ink-subtle">Name</dt>
+                <dd className="mt-0.5 truncate text-sm font-semibold text-ink">
+                  {[firstName, lastName].filter(Boolean).join(" ") || "—"}
+                </dd>
               </div>
               <div>
-                <label className="form-label" htmlFor="fname">First Name</label>
-                <input id="fname" required className="form-input" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+                <dt className="text-2xs font-semibold uppercase tracking-wide text-ink-subtle">Email</dt>
+                <dd className="mt-0.5 truncate text-sm text-ink">{personEmail || "—"}</dd>
               </div>
               <div>
-                <label className="form-label" htmlFor="lname">Last Name</label>
-                <input id="lname" className="form-input" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+                <dt className="text-2xs font-semibold uppercase tracking-wide text-ink-subtle">Mobile</dt>
+                <dd className="mt-0.5 truncate text-sm text-ink">
+                  {mobileNumber || (
+                    <Link href="/profile" className="font-semibold text-navy hover:underline">
+                      Add in profile
+                    </Link>
+                  )}
+                </dd>
               </div>
-            </div>
+              {!missingDetails.includes("gender") && (
+                <div>
+                  <dt className="text-2xs font-semibold uppercase tracking-wide text-ink-subtle">Gender</dt>
+                  <dd className="mt-0.5 text-sm text-ink">{gender || "—"}</dd>
+                </div>
+              )}
+              {!missingDetails.includes("streetAddress") && (
+                <div className="col-span-2">
+                  <dt className="text-2xs font-semibold uppercase tracking-wide text-ink-subtle">Your address</dt>
+                  <dd className="mt-0.5 truncate text-sm text-ink">
+                    {streetAddress || "—"}
+                    {pincode ? ` · ${pincode}` : ""}
+                  </dd>
+                </div>
+              )}
+            </dl>
 
-            <div className="mt-5">
-              <span className="form-label">Gender</span>
-              <div className="flex flex-wrap gap-2">
-                {["Male", "Female", "Transgender"].map((g) => (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() => setGender(g)}
-                    aria-pressed={gender === g}
-                    className={gender === g ? "chip-active" : "chip-idle"}
-                  >
-                    {gender === g && <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden="true" />}
-                    {g}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <p className="mt-2.5 text-xs text-ink-muted">
+              Something out of date?{" "}
+              <Link href="/profile" className="font-semibold text-navy hover:underline">
+                Update it in your profile
+              </Link>
+              .
+            </p>
 
-            <div className="mt-5">
-              <label className="form-label" htmlFor="streetAddr">Street Address</label>
-              <input id="streetAddr" required className="form-input" value={streetAddress} onChange={(e) => setStreetAddress(e.target.value)} />
-            </div>
+            {/* Only the genuinely missing pieces are asked for */}
+            {missingDetails.length > 0 && (
+              <div className="mt-6 border-t border-canvas-border pt-5">
+                <p className="mb-4 flex items-start gap-1.5 text-sm text-ink-muted">
+                  <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-faint" aria-hidden="true" />
+                  These are missing from your profile. Fill them in once and future complaints
+                  will use them automatically.
+                </p>
 
-            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label className="form-label" htmlFor="cpincode">Pin Code</label>
-                <input id="cpincode" inputMode="numeric" maxLength={6} required className="form-input" value={pincode}
-                  onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))} />
+                {missingDetails.includes("firstName") && (
+                  <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="form-label" htmlFor="fname">First name</label>
+                      <input id="fname" required className="form-input" value={firstName}
+                        onChange={(e) => setFirstName(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="form-label" htmlFor="lname">
+                        Last name <span className="normal-case text-ink-faint">(optional)</span>
+                      </label>
+                      <input id="lname" className="form-input" value={lastName}
+                        onChange={(e) => setLastName(e.target.value)} />
+                    </div>
+                  </div>
+                )}
+
+                {missingDetails.includes("gender") && (
+                  <div className="mb-5">
+                    <span className="form-label">Gender</span>
+                    <div className="flex flex-wrap gap-2">
+                      {["Male", "Female", "Transgender"].map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setGender(g)}
+                          aria-pressed={gender === g}
+                          className={gender === g ? "chip-active" : "chip-idle"}
+                        >
+                          {gender === g && <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden="true" />}
+                          {g}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {missingDetails.includes("streetAddress") && (
+                  <div className="mb-5">
+                    <label className="form-label" htmlFor="streetAddr">
+                      Your address <span className="normal-case text-ink-faint">(where you live, not the problem location)</span>
+                    </label>
+                    <input id="streetAddr" required className="form-input" value={streetAddress}
+                      onChange={(e) => setStreetAddress(e.target.value)} />
+                  </div>
+                )}
+
+                {missingDetails.includes("pincode") && (
+                  <div className="mb-5 sm:max-w-[50%]">
+                    <label className="form-label" htmlFor="cpincode">Your PIN code</label>
+                    <input id="cpincode" inputMode="numeric" maxLength={6} required className="form-input"
+                      value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))} />
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="form-label" htmlFor="cmobile">Mobile Number <span className="normal-case text-ink-faint">(optional)</span></label>
-                <input id="cmobile" inputMode="numeric" maxLength={10} className="form-input" value={mobileNumber}
-                  onChange={(e) => setMobileNumber(e.target.value.replace(/\D/g, ""))} />
-                <p className="form-hint">Only if you want SMS updates.</p>
-              </div>
-              <div>
-                <label className="form-label" htmlFor="secPhone">Secondary Phone <span className="normal-case text-ink-faint">(optional)</span></label>
-                <input id="secPhone" className="form-input" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
-              </div>
-              <div>
-                <label className="form-label" htmlFor="pEmail">Email Address</label>
-                <input id="pEmail" type="email" className="form-input" value={personEmail}
-                  disabled={!!me} onChange={(e) => setPersonEmail(e.target.value)} />
-                {me && <p className="form-hint">From your account.</p>}
-              </div>
-            </div>
+            )}
 
             {submitError && (
               <p className="form-error mt-4">
@@ -708,15 +805,26 @@ export default function FileComplaintPage() {
               <Link href="/citizen" className="btn-secondary">Cancel</Link>
               <button
                 type="button"
+                disabled={savingProfile}
                 className="btn-primary group"
-                onClick={() => {
+                onClick={async () => {
                   const err = validateDetails();
                   if (err) { setSubmitError(err); return; }
+                  await saveDetailsToProfile();
                   goToStep(2);
                 }}
               >
-                Next: Location
-                <ArrowRight className="h-4 w-4 transition-transform duration-200 ease-spring group-hover:translate-x-0.5" aria-hidden="true" />
+                {savingProfile ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    Saving&hellip;
+                  </>
+                ) : (
+                  <>
+                    Next: Location
+                    <ArrowRight className="h-4 w-4 transition-transform duration-200 ease-spring group-hover:translate-x-0.5" aria-hidden="true" />
+                  </>
+                )}
               </button>
             </div>
           </div>

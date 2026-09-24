@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
 
-    const { email, password, role, departmentId } = parsed.data;
+    const { email, password, firstName, lastName, role, departmentId } = parsed.data;
 
     const [existing] = await pool.query<RowDataPacket[]>(
       "SELECT id FROM users WHERE email = ? LIMIT 1",
@@ -51,10 +51,17 @@ export async function POST(req: NextRequest) {
     // Email verification is disabled, so the account is usable immediately.
     // email_verification_exempt records WHY it may sign in without a verified
     // address; email_verified_at stays NULL because nobody ever confirmed it.
-    await pool.query<ResultSetHeader>(
+    const [ins] = await pool.query<ResultSetHeader>(
       `INSERT INTO users (email, password_hash, role, department_id, email_verification_exempt)
        VALUES (?, ?, ?, ?, 1)`,
       [email, passwordHash, role, finalDepartmentId]
+    );
+
+    // Store the name straight away so the complaint form can prefill it and
+    // never has to ask for the same details on every complaint.
+    await pool.query(
+      "INSERT INTO user_profiles (user_id, first_name, last_name) VALUES (?, ?, ?)",
+      [ins.insertId, firstName, lastName || null]
     );
 
     return NextResponse.json({ message: "Account created successfully. Please sign in." });
